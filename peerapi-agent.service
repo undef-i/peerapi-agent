@@ -1,0 +1,16 @@
+[Unit]
+Description=iEdon PeerAPI Agent Service
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/data/peerapi-agent/
+ExecStart=/data/peerapi-agent/venv/bin/python /data/peerapi-agent/peerapi-agent.py
+Environment="VIRTUAL_ENV=/data/peerapi-agent/venv"
+Environment="PATH=$VIRTUAL_ENV/bin:$PATH:/usr/local/sbin:/usr/bin:/usr/sbin"
+Restart=always
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target

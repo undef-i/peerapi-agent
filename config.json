@@ -1,0 +1,21 @@
+{
+    "server": {
+        "debug": false,
+        "listen": ":8080",
+        "readTimeout": 5,
+        "writeTimeout": 10,
+        "idleTimeout": 120,
+        "writeBufferSize": 4096,
+        "readBufferSize": 4096,
+        "bodyLimit": 1048576,
+        "trustedProxies": [
+            "127.0.0.1",
+            "::1"
+        ]
+    },
+
+    "bird": {
+        "controlSocket": "/var/run/bird/bird.ctl"
+    }
+
+}

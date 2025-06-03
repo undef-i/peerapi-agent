@@ -1,0 +1,7 @@
+.DS_Store
+peerapi-agent
+peerapi-agent.exe
+src/config.json
+src/peerapi-agent
+src/peerapi-agent.exe
+src/go.sum
