@@ -1,21 +1,55 @@
 {
-    "server": {
-        "debug": false,
-        "listen": ":8080",
-        "readTimeout": 5,
-        "writeTimeout": 10,
-        "idleTimeout": 120,
-        "writeBufferSize": 4096,
-        "readBufferSize": 4096,
-        "bodyLimit": 1048576,
-        "trustedProxies": [
-            "127.0.0.1",
-            "::1"
-        ]
-    },
+  "server": {
+    "debug": false,
+    "listen": ":8080",
+    "readTimeout": 5,
+    "writeTimeout": 10,
+    "idleTimeout": 120,
+    "writeBufferSize": 4096,
+    "readBufferSize": 4096,
+    "bodyLimit": 1048576,
+    "trustedProxies": ["127.0.0.1", "::1"]
+  },
 
-    "bird": {
-        "controlSocket": "/var/run/bird/bird.ctl"
-    }
+  "peerApiCenter": {
+    "url": "http://10.127.21.55:3000",
+    "secret": "hehehe",
+    "requestTimeout": 15,
+    "routerUuid": "40ca6d20-048d-4cb2-89be-e94f99af6781",
+    "agentSecret": "hahaha",
+    "heartbeatInterval": 30,
+    "syncInterval": 300,
+    "metricInterval": 60,
+    "wanInterfaces": ["eth0"]
+  },
 
+  "bird": {
+    "controlSocket": "/var/run/bird/bird.ctl",
+    "poolSize": 5,
+    "poolSizeMax": 128,
+    "bgpPeerConfDir": "/etc/bird/peers",
+    "bgpPeerConfTemplateFile": "./templates/peer.conf"
+  },
+
+  "metric": {
+    "autoTeardown": true,
+    "maxMindGeoLiteCountryMmdbPath": "./GeoLite2-Country.mmdb",
+    "geoIPCountryMode": "blacklist",
+    "blacklistGeoCountries": [ "CN" ],
+    "whitelistGeoCountries": [ "US", "DE", "FR", "GB", "NL", "JP", "CA", "AU" ],
+    "pingTimeout": 5,
+    "pingCount": 4
+  },
+
+  "wireguard": {
+    "wgConfDir": "/etc/wireguard",
+    "ipv4": "172.23.91.132",
+    "ipv6": "fd42:4242:2189:118::1",
+    "ipv6LinkLocal": "fe80::118",
+    "privateKeyPath": "/etc/wireguard/privateKey",
+    "publicKeyPath": "/etc/wireguard/publicKey",
+    "allocatePort": true,
+    "dn42BandwidthCommunity": 24,
+    "dn42InterfaceSecurityCommunity": 34
+  }
 }
