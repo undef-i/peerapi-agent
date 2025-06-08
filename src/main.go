@@ -31,8 +31,15 @@ var (
 var localSessions = make(map[string]BgpSession)
 var localMetrics = make(map[string]SessionMetric)
 var localTrafficRate = make(map[string]TrafficRate)
-var mutex sync.RWMutex
-var bwMonitorMutex sync.Mutex
+
+// Dedicated mutexes for different data structures to reduce contention
+var sessionMutex sync.RWMutex // Protects localSessions
+var metricMutex sync.RWMutex  // Protects localMetrics
+var trafficMutex sync.RWMutex // Protects localTrafficRate
+
+// Global map to track RTT measurement information for sessions
+var rttTrackers = make(map[string]*RTTTracker) // Key is session.UUID
+var rttMutex sync.RWMutex                      // Dedicated mutex for RTT-related operations
 
 func initBirdConnectionPool() error {
 	var err error

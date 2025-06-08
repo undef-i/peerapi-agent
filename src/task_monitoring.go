@@ -55,8 +55,9 @@ func monitorTrafficRates() {
 		return
 	}
 
-	bwMonitorMutex.Lock()
-	defer bwMonitorMutex.Unlock()
+	// Process traffic data and update under trafficMutex protection
+	trafficMutex.Lock()
+	defer trafficMutex.Unlock()
 
 	// Calculate traffic rates for each interface
 	for iface, s1 := range stats1 {

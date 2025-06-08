@@ -98,7 +98,7 @@ func geoCheckTask() {
 // performGeoCheck checks all active sessions against geo rules
 func performGeoCheck() {
 	// Get all active sessions
-	mutex.RLock()
+	sessionMutex.RLock()
 	sessionsToCheck := make([]BgpSession, 0, len(localSessions))
 	for _, session := range localSessions {
 		// Only check active sessions
@@ -106,7 +106,7 @@ func performGeoCheck() {
 			sessionsToCheck = append(sessionsToCheck, session)
 		}
 	}
-	mutex.RUnlock()
+	sessionMutex.RUnlock()
 
 	if len(sessionsToCheck) == 0 {
 		log.Println("[GeoCheck] No active sessions to check")

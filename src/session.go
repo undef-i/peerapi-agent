@@ -44,7 +44,7 @@ type BirdTemplateData struct {
 var birdConfMutex sync.Mutex
 
 // configureInterface sets up network interfaces based on the BGP session parameters.
-// Currently supports WireGuard interface type.
+// Currently supports WireGuard and GRE interface types.
 func configureInterface(session *BgpSession) error {
 	// Set a timeout for commands to prevent hanging
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -56,6 +56,8 @@ func configureInterface(session *BgpSession) error {
 	switch session.Type {
 	case "wireguard":
 		return configureWireguardInterface(ctx, session)
+	case "gre", "ip6gre":
+		return configureGreInterface(ctx, session)
 	default:
 		return fmt.Errorf("unsupported session type: %s", session.Type)
 	}
@@ -147,12 +149,89 @@ func configureWireguardInterface(ctx context.Context, session *BgpSession) error
 	return nil
 }
 
+// configureGreInterface sets up a GRE tunnel for the BGP session
+// Handles both IPv4 GRE (gre) and IPv6 GRE (ip6gre) tunnel types
+func configureGreInterface(ctx context.Context, session *BgpSession) error {
+	// Delete the interface if it exists to ensure clean state
+	if err := deleteInterface(session.Interface); err != nil {
+		log.Printf("Warning: Failed to delete existing interface %s: %v", session.Interface, err)
+		// Continue anyway as we'll try to recreate it
+	}
+
+	var cmd *exec.Cmd
+	isIPv6 := session.Type == "ip6gre"
+
+	if isIPv6 {
+		// IPv6 GRE tunnel (ip6gre)
+		cmd = exec.CommandContext(ctx, "ip", "-6", "tunnel", "add", session.Interface,
+			"mode", "ip6gre",
+			"local", cfg.GRE.LocalEndpointHost6,
+			"remote", session.Endpoint)
+
+		log.Printf("Creating IPv6 GRE tunnel: %s with local: %s remote: %s",
+			session.Interface, cfg.GRE.LocalEndpointHost6, session.Endpoint)
+	} else {
+		// IPv4 GRE tunnel (gre)
+		cmd = exec.CommandContext(ctx, "ip", "tunnel", "add", session.Interface,
+			"mode", "gre",
+			"local", cfg.GRE.LocalEndpointHost4,
+			"remote", session.Endpoint)
+
+		log.Printf("Creating IPv4 GRE tunnel: %s with local: %s remote: %s",
+			session.Interface, cfg.GRE.LocalEndpointHost4, session.Endpoint)
+	}
+
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to create %s tunnel: %v", session.Type, err)
+	}
+
+	// Configure IP addresses
+	if err := configureIPAddresses(ctx, session); err != nil {
+		return err
+	}
+
+	// Set MTU
+	cmd = exec.CommandContext(ctx, "ip", "link", "set", "mtu", strconv.Itoa(session.MTU), "dev", session.Interface)
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to set MTU: %v", err)
+	}
+
+	// Bring up interface
+	cmd = exec.CommandContext(ctx, "ip", "link", "set", "up", "dev", session.Interface)
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to bring up interface: %v", err)
+	}
+
+	log.Printf("Successfully configured %s interface %s for session %s",
+		session.Type, session.Interface, session.UUID)
+	return nil
+}
+
 // configureIPAddresses sets up IP addresses on the interface
 func configureIPAddresses(ctx context.Context, session *BgpSession) error {
+	// Get local IP configuration based on session type
+	var localIPv4, localIPv6, localIPv6LinkLocal string
+
+	switch session.Type {
+	case "wireguard":
+		localIPv4 = cfg.WireGuard.IPv4
+		localIPv6 = cfg.WireGuard.IPv6
+		localIPv6LinkLocal = cfg.WireGuard.IPv6LinkLocal
+	case "gre", "ip6gre":
+		localIPv4 = cfg.GRE.IPv4
+		localIPv6 = cfg.GRE.IPv6
+		localIPv6LinkLocal = cfg.GRE.IPv6LinkLocal
+	default:
+		// Use WireGuard as fallback for unknown types
+		localIPv4 = cfg.WireGuard.IPv4
+		localIPv6 = cfg.WireGuard.IPv6
+		localIPv6LinkLocal = cfg.WireGuard.IPv6LinkLocal
+	}
+
 	// Configure IPv4 if provided
 	if session.IPv4 != "" {
 		cmd := exec.CommandContext(ctx, "ip", "addr", "add", "dev", session.Interface,
-			cfg.WireGuard.IPv4+"/32", "peer", session.IPv4+"/32")
+			localIPv4+"/32", "peer", session.IPv4+"/32")
 		if err := cmd.Run(); err != nil {
 			return fmt.Errorf("failed to add IPv4: %v", err)
 		}
@@ -162,7 +241,7 @@ func configureIPAddresses(ctx context.Context, session *BgpSession) error {
 	// Configure IPv6 Link-Local if provided, otherwise use global IPv6
 	if session.IPv6LinkLocal != "" {
 		cmd := exec.CommandContext(ctx, "ip", "addr", "add", "dev", session.Interface,
-			cfg.WireGuard.IPv6LinkLocal+"/64", "peer", session.IPv6LinkLocal+"/64")
+			localIPv6LinkLocal+"/64", "peer", session.IPv6LinkLocal+"/64")
 		if err := cmd.Run(); err != nil {
 			return fmt.Errorf("failed to add IPv6 link-local: %v", err)
 		}
@@ -170,7 +249,7 @@ func configureIPAddresses(ctx context.Context, session *BgpSession) error {
 			session.IPv6LinkLocal, session.Interface)
 	} else if session.IPv6 != "" {
 		cmd := exec.CommandContext(ctx, "ip", "addr", "add", "dev", session.Interface,
-			cfg.WireGuard.IPv6+"/128", "peer", session.IPv6+"/128")
+			localIPv6+"/128", "peer", session.IPv6+"/128")
 		if err := cmd.Run(); err != nil {
 			return fmt.Errorf("failed to add IPv6: %v", err)
 		}
@@ -280,9 +359,13 @@ func getCommunityValues(sessionType string) (int, int) {
 	ifSecCommunity := 31
 
 	// Override defaults for known session types
-	if sessionType == "wireguard" {
+	switch sessionType {
+	case "wireguard":
 		ifBwCommunity = cfg.WireGuard.DN42BandwidthCommunity
 		ifSecCommunity = cfg.WireGuard.DN42InterfaceSecurityCommunity
+	case "gre", "ip6gre":
+		ifBwCommunity = cfg.GRE.DN42BandwidthCommunity
+		ifSecCommunity = cfg.GRE.DN42InterfaceSecurityCommunity
 	}
 
 	return ifBwCommunity, ifSecCommunity

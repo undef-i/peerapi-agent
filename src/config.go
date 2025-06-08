@@ -55,6 +55,16 @@ type wireGuardConfig struct {
 	DN42InterfaceSecurityCommunity int    `json:"dn42InterfaceSecurityCommunity"`
 }
 
+type greConfig struct {
+	IPv4                           string `json:"ipv4"`               // IPv4 address for GRE interface
+	IPv6                           string `json:"ipv6"`               // IPv6 address for GRE interface
+	IPv6LinkLocal                  string `json:"ipv6LinkLocal"`      // IPv6 link-local address for GRE interface
+	LocalEndpointHost4             string `json:"localEndpointHost4"` // Local IPv4 endpoint for GRE tunnel
+	LocalEndpointHost6             string `json:"localEndpointHost6"` // Local IPv6 endpoint for GRE tunnel
+	DN42BandwidthCommunity         int    `json:"dn42BandwidthCommunity"`
+	DN42InterfaceSecurityCommunity int    `json:"dn42InterfaceSecurityCommunity"`
+}
+
 type metricConfig struct {
 	AutoTeardown                  bool     `json:"autoTeardown"`                  // Automatically teardown sessions based on metrics
 	MaxMindGeoLiteCountryMmdbPath string   `json:"maxMindGeoLiteCountryMmdbPath"` // Path to MaxMind GeoLite2 Country database
@@ -71,6 +81,7 @@ type config struct {
 	Bird      birdConfig          `json:"bird"`
 	Metric    metricConfig        `json:"metric"`
 	WireGuard wireGuardConfig     `json:"wireGuard"`
+	GRE       greConfig           `json:"gre"`
 }
 
 func loadConfig(filename string) (*config, error) {

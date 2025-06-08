@@ -33,8 +33,10 @@ func collectMetrics(session ...BgpSession) {
 		return
 	}
 
+	// Pre-process RTT measurements in parallel for better performance
+	batchMeasureRTT()
 	// Otherwise collect metrics for all active sessions
-	mutex.RLock()
+	sessionMutex.RLock()
 	for _, s := range localSessions {
 		if s.Status != PEERING_STATUS_ENABLED && s.Status != PEERING_STATUS_PROBLEM {
 			continue
@@ -42,17 +44,16 @@ func collectMetrics(session ...BgpSession) {
 
 		collectSessionMetric(s, now, newSessionMetrics)
 	}
-	mutex.RUnlock()
+	sessionMutex.RUnlock()
 
 	if len(newSessionMetrics) == 0 {
 		log.Println("[Metrics] No active sessions to collect metrics from.")
 		return
 	}
-
 	// Update the local metric map with the latest metrics
-	mutex.Lock()
+	metricMutex.Lock()
 	maps.Copy(localMetrics, newSessionMetrics)
-	mutex.Unlock()
+	metricMutex.Unlock()
 
 	// Send metrics to PeerAPI
 	sendMetricsToPeerAPI(newSessionMetrics)
@@ -220,13 +221,12 @@ func createBGPMetric(state, info string, ipv4Import, ipv4Export, ipv6Import, ipv
 // getTrafficRates retrieves current traffic rates for an interface
 func getTrafficRates(interfaceName string) (int64, int64) {
 	var rxRate, txRate int64 = 0, 0
-
-	mutex.RLock()
+	trafficMutex.RLock()
 	if trafficRate, exists := localTrafficRate[interfaceName]; exists {
 		rxRate = int64(trafficRate.RxRate)
 		txRate = int64(trafficRate.TxRate)
 	}
-	mutex.RUnlock()
+	trafficMutex.RUnlock()
 
 	return rxRate, txRate
 }
@@ -274,8 +274,8 @@ func initializeSessionMetric(session BgpSession, timestamp int64, bgpMetrics []B
 func updateMetricsWithHistory(session BgpSession, timestamp int64, metric SessionMetric,
 	ipv4Import, ipv4Export, ipv6Import, ipv6Export int64, mpBGP bool) {
 
-	mutex.RLock()
-	defer mutex.RUnlock()
+	metricMutex.RLock()
+	defer metricMutex.RUnlock()
 
 	// Get old metrics if available
 	oldMetric, exists := localMetrics[session.UUID]
@@ -317,14 +317,30 @@ func updateTrafficMetrics(metric *SessionMetric, oldMetric SessionMetric, timest
 	metric.Interface.Traffic.Metric = trafficMetric
 }
 
-// updateRTTMetrics updates RTT (ping) metrics
+// updateRTTMetrics updates RTT (ping) metrics with improved efficiency
 func updateRTTMetrics(metric *SessionMetric, oldMetric SessionMetric, session BgpSession, timestamp int64) {
-	// Measure current RTT value
-	rttValue := measureRTT(
-		session.IPv4,
-		session.IPv6,
-		fmt.Sprintf("%s%%%s", session.IPv6LinkLocal, session.Interface),
-	)
+	// Check if we have a recent RTT value (less than 5 minutes old)
+	var rttValue int
+
+	// Use dedicated rttMutex to protect access to rttTrackers map
+	rttMutex.Lock()
+	tracker, exists := rttTrackers[session.UUID]
+
+	if exists && time.Since(tracker.LastSuccessTime) < 5*time.Minute {
+		// Use the cached RTT value if recent enough
+		rttValue = tracker.LastRTT
+		rttMutex.Unlock()
+	} else {
+		rttMutex.Unlock() // Unlock before the potentially time-consuming ping operation
+
+		// Measure current RTT value using the optimized function
+		rttValue = measureRTT(
+			session.UUID,
+			session.IPv4,
+			session.IPv6,
+			fmt.Sprintf("%s%%%s", session.IPv6LinkLocal, session.Interface),
+		)
+	}
 
 	rttMetric := oldMetric.RTT.Metric
 	rttMetric = append(rttMetric, [2]int{int(timestamp), rttValue})
@@ -434,9 +450,9 @@ func initializeFirstTimeMetrics(metric *SessionMetric, session BgpSession, times
 		metric.Interface.Traffic.Current[0],
 		metric.Interface.Traffic.Current[1],
 	}}
-
 	// Initialize RTT metric with a single data point
 	rttValue := measureRTT(
+		session.UUID,
 		session.IPv4,
 		session.IPv6,
 		fmt.Sprintf("%s%%%s", session.IPv6LinkLocal, session.Interface),
@@ -469,45 +485,238 @@ func initializeFirstTimeMetrics(metric *SessionMetric, session BgpSession, times
 	}
 }
 
-// Helper function to measure RTT (ping time) to a peer
-func measureRTT(ipv4, ipv6, ipv6ll string) int {
-	// First try IPv6LL
-	if ipv6ll != "" {
-		rtt := pingRTT(fmt.Sprintf("[%s]", ipv6ll))
-		if rtt > 0 {
-			return rtt
+// measureRTT is an optimized version of measureRTT that tries to use the
+// most recently successful IP protocol first, before falling back to others
+func measureRTT(sessionUUID, ipv4, ipv6, ipv6ll string) int {
+	// Check if we have a preferred protocol for this session
+	rttMutex.RLock()
+	tracker, exists := rttTrackers[sessionUUID]
+	rttMutex.RUnlock()
+
+	// Order of attempts based on previous success
+	var attemptOrder []string
+
+	if exists && tracker.PreferredProtocol != "" {
+		// Try the previously successful protocol first
+		attemptOrder = []string{tracker.PreferredProtocol}
+
+		// Then add the other protocols
+		for _, proto := range []string{"ipv6ll", "ipv6", "ipv4"} {
+			if proto != tracker.PreferredProtocol {
+				attemptOrder = append(attemptOrder, proto)
+			}
+		}
+	} else {
+		// Default order: IPv6 link-local first (usually faster), then IPv6, then IPv4
+		attemptOrder = []string{"ipv6ll", "ipv6", "ipv4"}
+	}
+
+	// Try protocols in determined order
+	for _, proto := range attemptOrder {
+		var rtt int
+
+		switch proto {
+		case "ipv6ll":
+			if ipv6ll != "" {
+				rtt = pingRTT(fmt.Sprintf("[%s]", ipv6ll))
+				if rtt > 0 {
+					// Update tracker with successful result
+					updateRTTTracker(sessionUUID, "ipv6ll", rtt)
+					return rtt
+				}
+			}
+		case "ipv6":
+			if ipv6 != "" {
+				rtt = pingRTT(fmt.Sprintf("[%s]", ipv6))
+				if rtt > 0 {
+					updateRTTTracker(sessionUUID, "ipv6", rtt)
+					return rtt
+				}
+			}
+		case "ipv4":
+			if ipv4 != "" {
+				rtt = pingRTT(ipv4)
+				if rtt > 0 {
+					updateRTTTracker(sessionUUID, "ipv4", rtt)
+					return rtt
+				}
+			}
 		}
 	}
 
-	// try IPv6
-	if ipv6 != "" {
-		rtt := pingRTT(fmt.Sprintf("[%s]", ipv6))
-		if rtt > 0 {
-			return rtt
-		}
-	}
-
-	// If IPv6 fails or is not available, try IPv4
-	if ipv4 != "" {
-		rtt := pingRTT(ipv4)
-		if rtt > 0 {
-			return rtt
-		}
-	}
-
+	// If all attempts fail, update tracker with failure and return 0
+	updateRTTTracker(sessionUUID, "", 0)
 	return 0
+}
+
+// updateRTTTracker updates the RTT tracking information for a session
+func updateRTTTracker(sessionUUID, preferredProtocol string, rtt int) {
+	rttMutex.Lock()
+	defer rttMutex.Unlock()
+
+	tracker, exists := rttTrackers[sessionUUID]
+	if !exists {
+		tracker = &RTTTracker{}
+		rttTrackers[sessionUUID] = tracker
+	}
+
+	if preferredProtocol != "" {
+		tracker.PreferredProtocol = preferredProtocol
+		tracker.LastSuccessTime = time.Now()
+		tracker.LastRTT = rtt
+	}
 }
 
 // Actual implementation of ping RTT measurement using tcping
 func pingRTT(ip string) int {
-	// Use tcping to check both default BGP ports
+	// Track recently failed destinations to use shorter timeouts
+	rttMutex.RLock()
+	lastKnownFailedIP, exists := failedPingCache[ip]
+	rttMutex.RUnlock()
+
+	// If this IP has failed recently, use a shorter timeout for the next attempt
+	timeout := cfg.Metric.PingTimeout
+	pingCount := cfg.Metric.PingCount
+
+	if exists && time.Since(lastKnownFailedIP) < 10*time.Minute {
+		// Use a reduced timeout and fewer pings for recently failed destinations
+		timeout = 1   // Use a 1-second timeout instead
+		pingCount = 1 // Just do a single ping attempt
+	}
+
 	// Try port 179 (standard BGP port)
 	addr := fmt.Sprintf("%s:179", ip)
-	return tcpingAverage(addr, cfg.Metric.PingCount, cfg.Metric.PingTimeout)
+	rtt := tcpingAverage(addr, pingCount, timeout)
+
+	// Update the failed IP cache
+	rttMutex.Lock()
+	if rtt <= 0 {
+		// Remember this as a failed IP
+		failedPingCache[ip] = time.Now()
+	} else {
+		// Remove from failed cache if it succeeds
+		delete(failedPingCache, ip)
+	}
+	rttMutex.Unlock()
+
+	return rtt
+}
+
+// Map to cache recently failed ping attempts to reduce timeout for known bad IPs
+var failedPingCache = make(map[string]time.Time)
+
+// batchMeasureRTT processes multiple RTT measurements in parallel
+// This function is meant to be called before the regular metric collection cycle
+func batchMeasureRTT() {
+	sessionMutex.RLock()
+	sessions := make([]BgpSession, 0, len(localSessions))
+	for _, session := range localSessions {
+		if session.Status == PEERING_STATUS_ENABLED || session.Status == PEERING_STATUS_PROBLEM {
+			sessions = append(sessions, session)
+		}
+	}
+	sessionMutex.RUnlock()
+
+	if len(sessions) == 0 {
+		return
+	}
+
+	// Create a worker pool with a reasonable number of workers
+	// Don't create too many or we might overwhelm the system
+	workerCount := min(len(sessions), 5)
+
+	// Create channels for work distribution
+	jobs := make(chan BgpSession, len(sessions))
+	results := make(chan struct{}, len(sessions))
+
+	// Start worker goroutines
+	for w := 1; w <= workerCount; w++ {
+		go rttWorker(jobs, results)
+	}
+
+	// Send sessions to be processed
+	for _, session := range sessions {
+		jobs <- session
+	}
+	close(jobs)
+
+	// Wait for all jobs to complete
+	for range sessions {
+		<-results
+	}
+}
+
+// rttWorker is a worker goroutine that processes RTT measurements
+func rttWorker(jobs <-chan BgpSession, results chan<- struct{}) {
+	for session := range jobs {
+		// Skip measurement if we have a recent value (less than 5 minutes old)
+		rttMutex.RLock()
+		tracker, exists := rttTrackers[session.UUID]
+		skipMeasurement := exists && time.Since(tracker.LastSuccessTime) < 5*time.Minute
+		rttMutex.RUnlock()
+
+		if !skipMeasurement {
+			// Perform RTT measurement
+			measureRTT(
+				session.UUID,
+				session.IPv4,
+				session.IPv6,
+				fmt.Sprintf("%s%%%s", session.IPv6LinkLocal, session.Interface),
+			)
+		}
+
+		// Signal that this job is done
+		results <- struct{}{}
+	}
+}
+
+// cleanupRTTCache periodically cleans up the RTT trackers and failed ping cache
+// to prevent memory leaks from accumulating over time
+func cleanupRTTCache() {
+	// Run this cleanup task every hour
+	ticker := time.NewTicker(1 * time.Hour)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		cleanupTime := time.Now()
+
+		// Get the current list of active session UUIDs
+		sessionMutex.RLock()
+		activeUUIDs := make(map[string]bool)
+		for _, s := range localSessions {
+			activeUUIDs[s.UUID] = true
+		}
+		sessionMutex.RUnlock()
+
+		// Cleanup RTT trackers
+		rttMutex.Lock()
+		for uuid := range rttTrackers {
+			// Remove trackers for sessions that no longer exist
+			// or haven't had a successful measurement in 24 hours
+			if !activeUUIDs[uuid] ||
+				time.Since(rttTrackers[uuid].LastSuccessTime) > 24*time.Hour {
+				delete(rttTrackers, uuid)
+			}
+		}
+
+		// Cleanup failed ping cache (remove entries older than 12 hours)
+		for ip, lastFailTime := range failedPingCache {
+			if time.Since(lastFailTime) > 12*time.Hour {
+				delete(failedPingCache, ip)
+			}
+		}
+		rttMutex.Unlock()
+
+		log.Printf("[Metrics] Cleaned up RTT caches at %s", cleanupTime.Format(time.RFC3339))
+	}
 }
 
 // metricTask schedules periodic metrics collection
 func metricTask() {
+	// Start the RTT cache cleanup routine
+	go cleanupRTTCache()
+
+	// Start the regular metrics collection
 	ticker := time.NewTicker(time.Duration(cfg.PeerAPI.MetricInterval) * time.Second)
 	defer ticker.Stop()
 

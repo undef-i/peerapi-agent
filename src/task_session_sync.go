@@ -223,10 +223,9 @@ func syncSessions() {
 	for i := range remoteSessions {
 		session := &remoteSessions[i]
 		remoteSessionUUIDs[session.UUID] = struct{}{}
-
-		mutex.RLock()
+		sessionMutex.RLock()
 		oldSession, exists := localSessions[session.UUID]
-		mutex.RUnlock()
+		sessionMutex.RUnlock()
 
 		if !exists {
 			// New session
@@ -236,18 +235,16 @@ func syncSessions() {
 			processChangedSession(session, &oldSession, nextLocal)
 		}
 	}
-
 	// Handle sessions that were deleted from the remote side
-	mutex.RLock()
+	sessionMutex.RLock()
 	for uuid, session := range localSessions {
 		if _, exists := remoteSessionUUIDs[uuid]; !exists {
 			processDeletedSession(&session)
 		}
 	}
-	mutex.RUnlock()
-
+	sessionMutex.RUnlock()
 	// Update local sessions map
-	mutex.Lock()
+	sessionMutex.Lock()
 	localSessions = nextLocal
-	mutex.Unlock()
+	sessionMutex.Unlock()
 }

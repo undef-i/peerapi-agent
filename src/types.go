@@ -1,6 +1,9 @@
 package main
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"time"
+)
 
 // Response formats
 type AgentApiResponse struct {
@@ -104,4 +107,11 @@ type InterfaceTrafficMetric struct {
 type RTT struct {
 	Current int      `json:"current"`
 	Metric  [][2]int `json:"metric"` // each metric is a pair [timestamp, value]
+}
+
+// RTTTracker holds information about the best protocol to use for RTT measurements
+type RTTTracker struct {
+	PreferredProtocol string    // "ipv4", "ipv6", or "ipv6ll"
+	LastSuccessTime   time.Time // When we last got a successful ping
+	LastRTT           int       // Last measured RTT value
 }
