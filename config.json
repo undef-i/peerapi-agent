@@ -11,6 +11,15 @@
     "trustedProxies": ["127.0.0.1", "::1"]
   },
 
+  "logger": {
+    "file": "./logs/peerapi-agent.log",
+    "maxSize": 10,
+    "maxBackups": 10,
+    "maxAge": 30,
+    "compress": true,
+    "consoleLogging": true
+  },
+
   "peerApiCenter": {
     "url": "http://10.127.21.55:3000",
     "secret": "hehehe",

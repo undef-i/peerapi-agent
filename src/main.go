@@ -75,6 +75,15 @@ func main() {
 		log.Fatalf("Failed to load config: %v\n", err)
 	}
 
+	// Initialize the custom logger
+	initLogger(&cfg.Logger)
+	// Close the logger when the application exits
+	defer func() {
+		if logger != nil {
+			logger.Close()
+		}
+	}()
+
 	if cfg.Metric.MaxMindGeoLiteCountryMmdbPath != "" {
 		db, err := geoip2.Open(cfg.Metric.MaxMindGeoLiteCountryMmdbPath)
 		if err != nil {

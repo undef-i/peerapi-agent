@@ -66,6 +66,15 @@ type greConfig struct {
 	DN42InterfaceSecurityCommunity int    `json:"dn42InterfaceSecurityCommunity"`
 }
 
+type loggerConfig struct {
+	File           string `json:"file"`           // Log file path
+	MaxSize        int    `json:"maxSize"`        // Maximum log file size in MB before rotation (default: 10MB)
+	MaxBackups     int    `json:"maxBackups"`     // Maximum number of log backups to keep (default: 10)
+	MaxAge         int    `json:"maxAge"`         // Maximum days to keep old log files (default: 30 days)
+	Compress       bool   `json:"compress"`       // Whether to compress old log files with gzip (default: true)
+	ConsoleLogging bool   `json:"consoleLogging"` // Whether to output logs to console (default: true)
+}
+
 type metricConfig struct {
 	AutoTeardown                  bool     `json:"autoTeardown"`                  // Automatically teardown sessions based on metrics
 	MaxMindGeoLiteCountryMmdbPath string   `json:"maxMindGeoLiteCountryMmdbPath"` // Path to MaxMind GeoLite2 Country database
@@ -83,6 +92,7 @@ type config struct {
 	Metric    metricConfig        `json:"metric"`
 	WireGuard wireGuardConfig     `json:"wireGuard"`
 	GRE       greConfig           `json:"gre"`
+	Logger    loggerConfig        `json:"logger"`
 }
 
 func loadConfig(filename string) (*config, error) {

@@ -6,3 +6,4 @@ src/peerapi-agent
 src/peerapi-agent.exe
 src/go.sum
 GeoLite2-Country.mmdb
+logs/*
