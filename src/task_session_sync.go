@@ -226,8 +226,6 @@ func mainSessionTask(ctx context.Context, wg *sync.WaitGroup) {
 	ticker := time.NewTicker(time.Duration(cfg.PeerAPI.SyncInterval) * time.Second)
 	defer ticker.Stop()
 
-	log.Println("[SessionSync] Starting session synchronization task")
-
 	// Sync sessions immediately on startup
 	syncSessions()
 

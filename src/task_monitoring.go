@@ -35,8 +35,6 @@ func bandwidthMonitorTask(ctx context.Context, wg *sync.WaitGroup) {
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
-	log.Println("[BandwidthMonitor] Starting bandwidth monitoring task")
-
 	for {
 		select {
 		case <-ctx.Done():
@@ -171,8 +169,6 @@ func heartbeatTask(ctx context.Context, wg *sync.WaitGroup) {
 	uname := getOsUname()
 	agent := client.New().SetTimeout(time.Duration(cfg.PeerAPI.RequestTimeout) * time.Second)
 	agent.SetUserAgent(SERVER_SIGNATURE)
-
-	log.Println("[HeartBeat] Starting heartbeat task")
 
 	// Send an initial heartbeat immediately
 	sendHeartbeat(agent, uname)

@@ -316,8 +316,6 @@ func deleteInterface(iface string) error {
 	if downErr != nil {
 		log.Printf("Warning: Failed to bring down interface %s: %v (output: \"%s\")", iface, downErr, strings.TrimSpace(downOutput))
 		// Continue with deletion anyway
-	} else {
-		log.Printf("Interface %s set down successfully (output: \"%s\")", iface, strings.TrimSpace(downOutput))
 	}
 
 	// Delete the interface

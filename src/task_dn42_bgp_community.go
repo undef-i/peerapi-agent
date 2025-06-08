@@ -253,8 +253,6 @@ func reloadBirdConfig() {
 func dn42BGPCommunityTask(ctx context.Context, wg *sync.WaitGroup) {
 	defer wg.Done()
 
-	log.Println("[DN42BGPCommunity] Starting DN42 BGP Community update task")
-
 	// Wait 120 seconds before the first run to allow RTT measurements to be collected
 	select {
 	case <-ctx.Done():

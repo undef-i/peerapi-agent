@@ -130,9 +130,8 @@ func collectSessionMetric(session BgpSession, timestamp int64, metrics map[strin
 
 	// Initialize new metric
 	metric := initializeSessionMetric(session, timestamp, bgpMetrics, rx, tx, rxRate, txRate)
-
 	// Update metrics with historical data if available
-	updateMetricsWithHistory(session, timestamp, metric, ipv4Import, ipv4Export, ipv6Import, ipv6Export, mpBGP)
+	updateMetricsWithHistory(session, timestamp, &metric, ipv4Import, ipv4Export, ipv6Import, ipv6Export, mpBGP)
 
 	metrics[session.UUID] = metric
 }
@@ -166,8 +165,8 @@ func collectTraditionalBGPMetrics(sessionName string, ipv4Import, ipv4Export, ip
 
 	// Create two BGP metrics, one for IPv4 and one for IPv6
 	*bgpMetrics = []BGPMetric{
-		createBGPMetric(stateV4, infoV4, int(ipv4ImportV4), int(ipv4ExportV4), 0, 0),
-		createBGPMetric(stateV6, infoV6, 0, 0, int(ipv6ImportV6), int(ipv6ExportV6)),
+		createBGPMetric(sessionName, stateV4, infoV4, int(ipv4ImportV4), int(ipv4ExportV4), 0, 0),
+		createBGPMetric(sessionName, stateV6, infoV6, 0, 0, int(ipv6ImportV6), int(ipv6ExportV6)),
 	}
 
 	// Set variables for history tracking
@@ -178,17 +177,17 @@ func collectTraditionalBGPMetrics(sessionName string, ipv4Import, ipv4Export, ip
 }
 
 // collectMPBGPMetrics collects metrics for MP-BGP sessions (combined v4 and v6)
-func collectMPBGPMetrics(interfaceName string, ipv4Import, ipv4Export, ipv6Import, ipv6Export *int64, bgpMetrics *[]BGPMetric) {
+func collectMPBGPMetrics(sessionName string, ipv4Import, ipv4Export, ipv6Import, ipv6Export *int64, bgpMetrics *[]BGPMetric) {
 	// For MP-BGP, we have a single session with both IPv4 and IPv6
-	state, _, info, ipv4ImportVal, ipv4ExportVal, ipv6ImportVal, ipv6ExportVal, err := birdPool.ShowProtocolRoutes(interfaceName)
+	state, _, info, ipv4ImportVal, ipv4ExportVal, ipv6ImportVal, ipv6ExportVal, err := birdPool.ShowProtocolRoutes(sessionName)
 	if err != nil {
-		log.Printf("[Metrics] Failed to get protocol routes for %s: %v\n", interfaceName, err)
+		log.Printf("[Metrics] Failed to get protocol routes for %s: %v\n", sessionName, err)
 		// Continue with empty values
 	}
 
 	// For MP-BGP, we only need one BGP metric
 	*bgpMetrics = []BGPMetric{
-		createBGPMetric(state, info, int(ipv4ImportVal), int(ipv4ExportVal), int(ipv6ImportVal), int(ipv6ExportVal)),
+		createBGPMetric(sessionName, state, info, int(ipv4ImportVal), int(ipv4ExportVal), int(ipv6ImportVal), int(ipv6ExportVal)),
 	}
 
 	// Set variables for history tracking
@@ -199,8 +198,9 @@ func collectMPBGPMetrics(interfaceName string, ipv4Import, ipv4Export, ipv6Impor
 }
 
 // createBGPMetric creates a BGP metric object with the given parameters
-func createBGPMetric(state, info string, ipv4Import, ipv4Export, ipv6Import, ipv6Export int) BGPMetric {
+func createBGPMetric(name, state, info string, ipv4Import, ipv4Export, ipv6Import, ipv6Export int) BGPMetric {
 	return BGPMetric{
+		Name:  name,
 		State: state,
 		Info:  info,
 		Routes: BGPRoutesMetric{
@@ -281,7 +281,7 @@ func initializeSessionMetric(session BgpSession, timestamp int64, bgpMetrics []B
 }
 
 // updateMetricsWithHistory updates metrics with historical data if available
-func updateMetricsWithHistory(session BgpSession, timestamp int64, metric SessionMetric,
+func updateMetricsWithHistory(session BgpSession, timestamp int64, metric *SessionMetric,
 	ipv4Import, ipv4Export, ipv6Import, ipv6Export int64, mpBGP bool) {
 
 	metricMutex.RLock()
@@ -289,23 +289,22 @@ func updateMetricsWithHistory(session BgpSession, timestamp int64, metric Sessio
 
 	// Get old metrics if available
 	oldMetric, exists := localMetrics[session.UUID]
-
 	if exists {
 		// Update traffic metrics history
-		updateTrafficMetrics(&metric, oldMetric, timestamp)
+		updateTrafficMetrics(metric, oldMetric, timestamp)
 
 		// Update RTT metrics
-		updateRTTMetrics(&metric, oldMetric, session, timestamp)
+		updateRTTMetrics(metric, oldMetric, session, timestamp)
 
 		// Update route metrics
 		if mpBGP {
-			updateMPBGPRouteMetrics(&metric, oldMetric, timestamp, ipv4Import, ipv4Export, ipv6Import, ipv6Export)
+			updateMPBGPRouteMetrics(metric, oldMetric, timestamp, ipv4Import, ipv4Export, ipv6Import, ipv6Export)
 		} else {
-			updateTraditionalBGPRouteMetrics(&metric, oldMetric, timestamp, ipv4Import, ipv4Export, ipv6Import, ipv6Export)
+			updateTraditionalBGPRouteMetrics(metric, oldMetric, timestamp, ipv4Import, ipv4Export, ipv6Import, ipv6Export)
 		}
 	} else {
 		// First time collection, initialize with single data points
-		initializeFirstTimeMetrics(&metric, session, timestamp, ipv4Import, ipv4Export, ipv6Import, ipv6Export, mpBGP)
+		initializeFirstTimeMetrics(metric, session, timestamp, ipv4Import, ipv4Export, ipv6Import, ipv6Export, mpBGP)
 	}
 }
 
@@ -609,6 +608,7 @@ func pingRTT(ip string) int {
 	}
 	rttMutex.Unlock()
 
+	log.Printf("[Metrics] Ping RTT for %s: %d ms (timeout: %d s, count: %d)\n", ip, rtt, timeout, pingCount)
 	return rtt
 }
 
@@ -686,8 +686,6 @@ func cleanupRTTCache(ctx context.Context) {
 	// Run this cleanup task every hour
 	ticker := time.NewTicker(1 * time.Hour)
 	defer ticker.Stop()
-
-	log.Println("[Metrics] Starting RTT cache cleanup task")
 
 	for {
 		select {
@@ -797,8 +795,6 @@ func metricTask(ctx context.Context, wg *sync.WaitGroup) {
 	// Start the regular metrics collection
 	ticker := time.NewTicker(time.Duration(cfg.PeerAPI.MetricInterval) * time.Second)
 	defer ticker.Stop()
-
-	log.Println("[Metrics] Starting metrics collection task")
 
 	// Collect metrics immediately on startup
 	collectMetrics()

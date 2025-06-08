@@ -68,6 +68,7 @@ type SessionMetric struct {
 }
 
 type BGPMetric struct {
+	Name   string          `json:"name"`
 	State  string          `json:"state"`
 	Info   string          `json:"info"`
 	Routes BGPRoutesMetric `json:"routes"`

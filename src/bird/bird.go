@@ -234,6 +234,8 @@ func (bp *BirdPool) Configure() (bool, error) {
 		return false, nil
 	}
 
+	// Dismiss output
+	bc.Read(nil)
 	return true, nil
 }
 

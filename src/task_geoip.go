@@ -92,8 +92,6 @@ func geoCheckTask(ctx context.Context, wg *sync.WaitGroup) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
-	log.Printf("[GeoCheck] Starting geo check task with interval of %v\n", interval)
-
 	// Run an initial check on startup
 	performGeoCheck()
 
