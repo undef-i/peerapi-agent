@@ -15,8 +15,7 @@ import (
 
 const (
 	// MAX_METRICS_HISTORY defines how many historical metric points to store
-	// 360 points at 1 minute intervals = 6 hours of history
-	MAX_METRICS_HISTORY = 360
+	MAX_METRICS_HISTORY = 100
 )
 
 // collectMetrics collects metrics for all sessions or a specific session
@@ -274,7 +273,7 @@ func initializeSessionMetric(session BgpSession, timestamp int64, bgpMetrics []B
 			},
 		},
 		RTT: RTT{
-			Current: 0, // Will be updated later with ping data
+			Current: -1, // Will be updated later with ping data
 			Metric:  make([][2]int, 0),
 		},
 	}
@@ -528,8 +527,7 @@ func measureRTT(sessionUUID, ipv4, ipv6, ipv6ll string) int {
 		case "ipv6ll":
 			if ipv6ll != "" {
 				rtt = pingRTT(fmt.Sprintf("[%s]", ipv6ll))
-				if rtt > 0 {
-					// Update tracker with successful result
+				if rtt != -1 {
 					updateRTTTracker(sessionUUID, "ipv6ll", rtt)
 					return rtt
 				}
@@ -537,7 +535,7 @@ func measureRTT(sessionUUID, ipv4, ipv6, ipv6ll string) int {
 		case "ipv6":
 			if ipv6 != "" {
 				rtt = pingRTT(fmt.Sprintf("[%s]", ipv6))
-				if rtt > 0 {
+				if rtt != -1 {
 					updateRTTTracker(sessionUUID, "ipv6", rtt)
 					return rtt
 				}
@@ -545,7 +543,7 @@ func measureRTT(sessionUUID, ipv4, ipv6, ipv6ll string) int {
 		case "ipv4":
 			if ipv4 != "" {
 				rtt = pingRTT(ipv4)
-				if rtt > 0 {
+				if rtt != -1 {
 					updateRTTTracker(sessionUUID, "ipv4", rtt)
 					return rtt
 				}
@@ -554,8 +552,8 @@ func measureRTT(sessionUUID, ipv4, ipv6, ipv6ll string) int {
 	}
 
 	// If all attempts fail, update tracker with failure and return 0
-	updateRTTTracker(sessionUUID, "", 0)
-	return 0
+	updateRTTTracker(sessionUUID, "", -1)
+	return -1
 }
 
 // updateRTTTracker updates the RTT tracking information for a session
