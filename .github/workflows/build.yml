@@ -30,6 +30,10 @@ jobs:
         with:
           go-version: 1.24
 
+      - name: Run go get in src
+        working-directory: ./src
+        run: go get
+
       - name: Build binaries
         working-directory: ./src
         run: GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -o peerapi-agent_${{ matrix.goos }}_${{ matrix.goarch }}
