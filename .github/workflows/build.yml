@@ -3,10 +3,6 @@ name: Build and Release Go Binaries
 on:
   release:
     types: [published]
-  push:
-    branches:
-      - main
-      - master
 
 jobs:
   compile:
