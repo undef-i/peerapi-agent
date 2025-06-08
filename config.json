@@ -49,7 +49,9 @@
     "blacklistGeoCountries": [ "CN" ],
     "whitelistGeoCountries": [ "US", "DE", "FR", "GB", "NL", "JP", "CA", "AU" ],
     "pingTimeout": 5,
-    "pingCount": 4
+    "pingCount": 4,
+    "geoCheckInterval": 900,
+    "bgpCommunityUpdateInterval": 3600
   },
 
   "wireguard": {

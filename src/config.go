@@ -83,6 +83,8 @@ type metricConfig struct {
 	WhitelistGeoCountries         []string `json:"whitelistGeoCountries"`         // List of countries to whitelist
 	PingTimeout                   int      `json:"pingTimeout"`                   // Timeout for ping requests in seconds
 	PingCount                     int      `json:"pingCount"`                     // Number of ping attempts
+	GeoCheckInterval              int      `json:"geoCheckInterval"`              // Interval for geo check task in seconds
+	BGPCommunityUpdateInterval    int      `json:"bgpCommunityUpdateInterval"`    // Interval for DN42 BGP community update task in seconds
 }
 
 type config struct {

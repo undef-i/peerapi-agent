@@ -252,7 +252,6 @@ func reloadBirdConfig() {
 // dn42BGPCommunityTask periodically updates the BGP communities based on RTT metrics
 func dn42BGPCommunityTask(ctx context.Context, wg *sync.WaitGroup) {
 	defer wg.Done()
-
 	// Wait 120 seconds before the first run to allow RTT measurements to be collected
 	select {
 	case <-ctx.Done():
@@ -264,8 +263,14 @@ func dn42BGPCommunityTask(ctx context.Context, wg *sync.WaitGroup) {
 		// Continue with execution
 	}
 
-	// Run every 60 minutes
-	ticker := time.NewTicker(60 * time.Minute)
+	// Use configured interval, default to 60 minutes (3600 seconds) if not set
+	interval := 3600
+	if cfg.Metric.BGPCommunityUpdateInterval > 0 {
+		interval = cfg.Metric.BGPCommunityUpdateInterval
+	}
+
+	log.Printf("[DN42BGPCommunity] Running with update interval of %d seconds", interval)
+	ticker := time.NewTicker(time.Duration(interval) * time.Second)
 	defer ticker.Stop()
 
 	// Run an initial update

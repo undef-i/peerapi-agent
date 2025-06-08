@@ -80,15 +80,20 @@ func checkBlacklistMode(session *BgpSession, countryCode string) bool {
 // geoCheckTask runs periodically to check all active sessions against geo rules
 func geoCheckTask(ctx context.Context, wg *sync.WaitGroup) {
 	defer wg.Done()
-
 	// Skip if geoDB is not initialized
 	if geoDB == nil {
 		log.Println("[GeoCheck] GeoIP database not initialized, geo checking disabled")
 		return
 	}
 
-	// Run every 15 minutes by default
-	interval := 15 * time.Minute
+	// Use configured interval, default to 15 minutes (900 seconds) if not set
+	intervalSeconds := 900
+	if cfg.Metric.GeoCheckInterval > 0 {
+		intervalSeconds = cfg.Metric.GeoCheckInterval
+	}
+
+	log.Printf("[GeoCheck] Running with check interval of %d seconds", intervalSeconds)
+	interval := time.Duration(intervalSeconds) * time.Second
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
