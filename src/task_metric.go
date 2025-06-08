@@ -1,11 +1,13 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
 	"maps"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/gofiber/fiber/v3/client"
@@ -672,55 +674,142 @@ func rttWorker(jobs <-chan BgpSession, results chan<- struct{}) {
 
 // cleanupRTTCache periodically cleans up the RTT trackers and failed ping cache
 // to prevent memory leaks from accumulating over time
-func cleanupRTTCache() {
+func cleanupRTTCache(ctx context.Context) {
 	// Run this cleanup task every hour
 	ticker := time.NewTicker(1 * time.Hour)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		cleanupTime := time.Now()
+	log.Println("[Metrics] Starting RTT cache cleanup task")
 
-		// Get the current list of active session UUIDs
-		sessionMutex.RLock()
-		activeUUIDs := make(map[string]bool)
-		for _, s := range localSessions {
-			activeUUIDs[s.UUID] = true
-		}
-		sessionMutex.RUnlock()
+	for {
+		select {
+		case <-ctx.Done():
+			shutdownStart := time.Now()
+			log.Println("[Metrics] Shutting down RTT cache cleanup task...")
 
-		// Cleanup RTT trackers
-		rttMutex.Lock()
-		for uuid := range rttTrackers {
-			// Remove trackers for sessions that no longer exist
-			// or haven't had a successful measurement in 24 hours
-			if !activeUUIDs[uuid] ||
-				time.Since(rttTrackers[uuid].LastSuccessTime) > 24*time.Hour {
-				delete(rttTrackers, uuid)
+			// Perform one final cleanup during shutdown with timeout
+			cleanupDone := make(chan struct{})
+			go func() {
+				performRTTCacheCleanup()
+				close(cleanupDone)
+			}()
+
+			// Wait with timeout
+			select {
+			case <-cleanupDone:
+				log.Printf("[Metrics] Final RTT cache cleanup completed in %v", time.Since(shutdownStart))
+			case <-time.After(2 * time.Second):
+				log.Printf("[Metrics] Final RTT cache cleanup timed out after %v", time.Since(shutdownStart))
 			}
-		}
 
-		// Cleanup failed ping cache (remove entries older than 12 hours)
-		for ip, lastFailTime := range failedPingCache {
-			if time.Since(lastFailTime) > 12*time.Hour {
-				delete(failedPingCache, ip)
-			}
+			return
+		case <-ticker.C:
+			performRTTCacheCleanup()
 		}
-		rttMutex.Unlock()
-
-		log.Printf("[Metrics] Cleaned up RTT caches at %s", cleanupTime.Format(time.RFC3339))
 	}
 }
 
+// performRTTCacheCleanup does the actual work of cleaning up RTT caches
+func performRTTCacheCleanup() {
+	cleanupTime := time.Now()
+
+	// Get the current list of active session UUIDs
+	sessionMutex.RLock()
+	activeUUIDs := make(map[string]bool)
+	for _, s := range localSessions {
+		activeUUIDs[s.UUID] = true
+	}
+	sessionMutex.RUnlock()
+
+	// Cleanup RTT trackers
+	rttMutex.Lock()
+	defer rttMutex.Unlock()
+
+	// Track cleanup stats
+	trackersRemoved := 0
+	cacheEntriesRemoved := 0
+
+	for uuid := range rttTrackers {
+		// Remove trackers for sessions that no longer exist
+		// or haven't had a successful measurement in 24 hours
+		if !activeUUIDs[uuid] ||
+			time.Since(rttTrackers[uuid].LastSuccessTime) > 24*time.Hour {
+			delete(rttTrackers, uuid)
+			trackersRemoved++
+		}
+	}
+
+	// Cleanup failed ping cache (remove entries older than 12 hours)
+	for ip, lastFailTime := range failedPingCache {
+		if time.Since(lastFailTime) > 12*time.Hour {
+			delete(failedPingCache, ip)
+			cacheEntriesRemoved++
+		}
+	}
+
+	log.Printf("[Metrics] Cleaned up RTT caches at %s (removed %d trackers, %d failed cache entries)",
+		cleanupTime.Format(time.RFC3339), trackersRemoved, cacheEntriesRemoved)
+}
+
 // metricTask schedules periodic metrics collection
-func metricTask() {
-	// Start the RTT cache cleanup routine
-	go cleanupRTTCache()
+func metricTask(ctx context.Context, wg *sync.WaitGroup) {
+	defer wg.Done()
+
+	// Start the RTT cache cleanup routine with context
+	cleanupCtx, cleanupCancel := context.WithCancel(ctx)
+	var cleanupWg sync.WaitGroup
+	cleanupWg.Add(1)
+	go func() {
+		defer cleanupWg.Done()
+		cleanupRTTCache(cleanupCtx)
+	}()
+
+	// Make sure to wait for cleanup goroutine to finish
+	defer func() {
+		shutdownStart := time.Now()
+		log.Println("[Metrics] Canceling RTT cache cleanup routine...")
+		cleanupCancel()
+
+		// Set a timeout for cleanup
+		cleanupDone := make(chan struct{})
+		go func() {
+			cleanupWg.Wait()
+			close(cleanupDone)
+		}()
+
+		// Wait for cleanup with timeout
+		select {
+		case <-cleanupDone:
+			log.Printf("[Metrics] RTT cache cleanup completed in %v", time.Since(shutdownStart))
+		case <-time.After(5 * time.Second):
+			log.Printf("[Metrics] RTT cache cleanup timed out after %v", time.Since(shutdownStart))
+		}
+	}()
 
 	// Start the regular metrics collection
 	ticker := time.NewTicker(time.Duration(cfg.PeerAPI.MetricInterval) * time.Second)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		collectMetrics()
+	log.Println("[Metrics] Starting metrics collection task")
+
+	// Collect metrics immediately on startup
+	collectMetrics()
+
+	for {
+		select {
+		case <-ctx.Done():
+			shutdownStart := time.Now()
+			log.Println("[Metrics] Shutting down metrics collection task...")
+
+			// Perform any cleanup specific to metrics
+			metricMutex.Lock()
+			log.Printf("[Metrics] Cleaning up %d metric entries", len(localMetrics))
+			metricMutex.Unlock()
+
+			log.Printf("[Metrics] Metrics collection task shutdown completed in %v", time.Since(shutdownStart))
+			return
+		case <-ticker.C:
+			collectMetrics()
+		}
 	}
 }

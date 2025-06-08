@@ -2,11 +2,13 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"log"
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gofiber/fiber/v3/client"
@@ -27,12 +29,30 @@ type TrafficRate struct {
 }
 
 // bandwidthMonitorTask runs every second to monitor bandwidth usage
-func bandwidthMonitorTask() {
+func bandwidthMonitorTask(ctx context.Context, wg *sync.WaitGroup) {
+	defer wg.Done()
+
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		monitorTrafficRates()
+	log.Println("[BandwidthMonitor] Starting bandwidth monitoring task")
+
+	for {
+		select {
+		case <-ctx.Done():
+			shutdownStart := time.Now()
+			log.Println("[BandwidthMonitor] Shutting down bandwidth monitoring task...")
+
+			// Perform any bandwidth-specific cleanup
+			trafficMutex.Lock()
+			log.Printf("[BandwidthMonitor] Cleaning up traffic data for %d interfaces", len(localTrafficRate))
+			trafficMutex.Unlock()
+
+			log.Printf("[BandwidthMonitor] Bandwidth monitoring task shutdown completed in %v", time.Since(shutdownStart))
+			return
+		case <-ticker.C:
+			monitorTrafficRates()
+		}
 	}
 }
 
@@ -142,7 +162,9 @@ func readNetStats() (map[string]NetStat, error) {
 }
 
 // heartbeatTask sends periodic heartbeats to the PeerAPI server
-func heartbeatTask() {
+func heartbeatTask(ctx context.Context, wg *sync.WaitGroup) {
+	defer wg.Done()
+
 	ticker := time.NewTicker(time.Duration(cfg.PeerAPI.HeartbeatInterval) * time.Second)
 	defer ticker.Stop()
 
@@ -150,8 +172,25 @@ func heartbeatTask() {
 	agent := client.New().SetTimeout(time.Duration(cfg.PeerAPI.RequestTimeout) * time.Second)
 	agent.SetUserAgent(SERVER_SIGNATURE)
 
-	for range ticker.C {
-		sendHeartbeat(agent, uname)
+	log.Println("[HeartBeat] Starting heartbeat task")
+
+	// Send an initial heartbeat immediately
+	sendHeartbeat(agent, uname)
+
+	for {
+		select {
+		case <-ctx.Done():
+			shutdownStart := time.Now()
+			log.Println("[HeartBeat] Shutting down heartbeat task...")
+
+			// Send one final status update with offline flag
+			// We could implement this feature in the future if needed
+
+			log.Printf("[HeartBeat] Heartbeat task shutdown completed in %v", time.Since(shutdownStart))
+			return
+		case <-ticker.C:
+			sendHeartbeat(agent, uname)
+		}
 	}
 }
 

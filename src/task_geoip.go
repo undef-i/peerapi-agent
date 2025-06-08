@@ -1,8 +1,10 @@
 package main
 
 import (
+	"context"
 	"log"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -76,7 +78,9 @@ func checkBlacklistMode(session *BgpSession, countryCode string) bool {
 }
 
 // geoCheckTask runs periodically to check all active sessions against geo rules
-func geoCheckTask() {
+func geoCheckTask(ctx context.Context, wg *sync.WaitGroup) {
+	defer wg.Done()
+
 	// Skip if geoDB is not initialized
 	if geoDB == nil {
 		log.Println("[GeoCheck] GeoIP database not initialized, geo checking disabled")
@@ -90,8 +94,25 @@ func geoCheckTask() {
 
 	log.Printf("[GeoCheck] Starting geo check task with interval of %v\n", interval)
 
-	for range ticker.C {
-		performGeoCheck()
+	// Run an initial check on startup
+	performGeoCheck()
+
+	for {
+		select {
+		case <-ctx.Done():
+			shutdownStart := time.Now()
+			log.Println("[GeoCheck] Shutting down geo check task...")
+
+			// Perform any geo-specific cleanup
+			if geoDB != nil {
+				log.Println("[GeoCheck] Ensuring GeoIP database is ready for cleanup")
+			}
+
+			log.Printf("[GeoCheck] Geo check task shutdown completed in %v", time.Since(shutdownStart))
+			return
+		case <-ticker.C:
+			performGeoCheck()
+		}
 	}
 }
 

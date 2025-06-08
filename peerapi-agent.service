@@ -11,5 +11,12 @@ ExecStart=/data/peerapi-agent/peerapi-agent -c /data/peerapi-agent/config.json
 Restart=always
 RestartSec=10s
 
+# Give the service time to gracefully shut down
+TimeoutStopSec=35s
+
+# Kill the process if it doesn't shut down gracefully
+KillMode=process
+KillSignal=SIGTERM
+
 [Install]
 WantedBy=multi-user.target

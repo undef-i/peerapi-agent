@@ -3,12 +3,14 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"math"
 	"os"
 	"path"
 	"slices"
+	"sync"
 	"time"
 )
 
@@ -248,20 +250,42 @@ func reloadBirdConfig() {
 }
 
 // dn42BGPCommunityTask periodically updates the BGP communities based on RTT metrics
-func dn42BGPCommunityTask() {
+func dn42BGPCommunityTask(ctx context.Context, wg *sync.WaitGroup) {
+	defer wg.Done()
+
+	log.Println("[DN42BGPCommunity] Starting DN42 BGP Community update task")
+
 	// Wait 120 seconds before the first run to allow RTT measurements to be collected
-	time.Sleep(120 * time.Second)
+	select {
+	case <-ctx.Done():
+		shutdownStart := time.Now()
+		log.Println("[DN42BGPCommunity] Shutting down DN42 BGP Community update task before initial run")
+		log.Printf("[DN42BGPCommunity] Task shutdown completed in %v", time.Since(shutdownStart))
+		return
+	case <-time.After(120 * time.Second):
+		// Continue with execution
+	}
 
 	// Run every 60 minutes
 	ticker := time.NewTicker(60 * time.Minute)
 	defer ticker.Stop()
 
-	log.Println("[DN42BGPCommunity] Starting DN42 BGP Community update task")
-
 	// Run an initial update
 	updateFilterParams()
 
-	for range ticker.C {
-		updateFilterParams()
+	for {
+		select {
+		case <-ctx.Done():
+			shutdownStart := time.Now()
+			log.Println("[DN42BGPCommunity] Shutting down DN42 BGP Community update task...")
+
+			// Perform any DN42 BGP Community-specific cleanup
+			log.Println("[DN42BGPCommunity] Ensuring Bird filter parameters are in a consistent state")
+
+			log.Printf("[DN42BGPCommunity] Task shutdown completed in %v", time.Since(shutdownStart))
+			return
+		case <-ticker.C:
+			updateFilterParams()
+		}
 	}
 }

@@ -12,6 +12,23 @@ Usage: ./peerapi-agent [-c config_file]
   -h    Print this message
 ```
 
+## Graceful Shutdown
+
+The peerapi-agent implements graceful shutdown handling to ensure that all background tasks are properly terminated and resources are cleaned up when the application shuts down. This helps prevent data loss and resource leaks.
+
+When the application receives a shutdown signal (SIGINT, SIGTERM), it:
+
+1. Cancels the root context to notify all background tasks to terminate
+2. Gracefully shuts down the HTTP server
+3. Waits for all background tasks to complete with a timeout
+4. Performs final resource cleanup (database connections, BIRD pool, etc.)
+
+The default shutdown timeout is 30 seconds, which should be sufficient for most deployments.
+
+### Running as a Service
+
+When running as a systemd service, the `peerapi-agent.service` file is configured with appropriate shutdown timeouts to ensure graceful termination.
+
 # Configuration
 ```json5
 {

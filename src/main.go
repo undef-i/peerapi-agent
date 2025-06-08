@@ -1,12 +1,15 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log"
 	"os"
+	"os/signal"
 	"runtime"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/gofiber/fiber/v3"
@@ -62,6 +65,10 @@ func main() {
 		return
 	}
 
+	// Create a root context for graceful shutdown
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	var err error
 	cfg, err = loadConfig(*configFile)
 	if err != nil {
@@ -74,12 +81,15 @@ func main() {
 			log.Fatalf("Failed to load MaxMind GeoLiteCountry MMDB: %v\n", err)
 		}
 		geoDB = db
+		// Ensure cleanup of the database
+		defer geoDB.Close()
 	}
 
 	// Initialize managers
 	if err := initBirdConnectionPool(); err != nil {
 		log.Fatalf("Failed to initialize bird connection pool: %v\n", err)
 	}
+	defer birdPool.Close() // Ensure bird pool is closed on exit
 
 	app := fiber.New(fiber.Config{
 		AppName:            SERVER_NAME,
@@ -96,13 +106,127 @@ func main() {
 
 	initRouter(app)
 
-	// Start background tasks
-	go heartbeatTask()
-	go mainSessionTask()
-	go metricTask()
-	go bandwidthMonitorTask()
-	go dn42BGPCommunityTask()
-	go geoCheckTask()
+	// Create a WaitGroup to track all running background tasks
+	var wg sync.WaitGroup
 
-	log.Fatal(app.Listen(cfg.Server.Listen))
+	// Start background tasks with context and waitgroup
+	wg.Add(6) // 6 is the number of background tasks
+	go heartbeatTask(ctx, &wg)
+	go mainSessionTask(ctx, &wg)
+	go metricTask(ctx, &wg)
+	go bandwidthMonitorTask(ctx, &wg)
+	go dn42BGPCommunityTask(ctx, &wg)
+	go geoCheckTask(ctx, &wg)
+
+	// Set up signal handling for graceful shutdown
+	shutdownChan := make(chan os.Signal, 1)
+	signal.Notify(shutdownChan, os.Interrupt, syscall.SIGTERM, syscall.SIGINT)
+
+	// Start the HTTP server in a goroutine
+	serverShutdown := make(chan error, 1)
+	go func() {
+		if err := app.Listen(cfg.Server.Listen); err != nil {
+			serverShutdown <- err
+		}
+	}()
+
+	// Wait for shutdown signal or server error
+	select {
+	case sig := <-shutdownChan:
+		log.Printf("Shutdown signal received: %v", sig)
+	case err := <-serverShutdown:
+		log.Printf("HTTP server error: %v", err)
+	}
+
+	// Initiate graceful shutdown
+	log.Println("Initiating graceful shutdown sequence...")
+
+	// Set a timeout for graceful shutdown
+	shutdownTimeout := 30 * time.Second
+	log.Printf("Using shutdown timeout of %v", shutdownTimeout)
+
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer shutdownCancel()
+
+	// First, cancel the context to notify all background tasks
+	log.Println("Signaling all background tasks to stop...")
+	cancel()
+
+	// Then shut down the HTTP server
+	log.Println("Shutting down HTTP server...")
+	serverShutdownStart := time.Now()
+
+	if err := app.ShutdownWithContext(shutdownCtx); err != nil {
+		log.Printf("Error shutting down HTTP server: %v", err)
+	} else {
+		log.Printf("HTTP server shut down successfully in %v", time.Since(serverShutdownStart))
+	}
+
+	// Wait for all background tasks to complete with timeout
+	log.Printf("Waiting for %d background tasks to complete...", 6) // 6 is the number of background tasks
+	taskShutdownStart := time.Now()
+
+	waitChan := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(waitChan)
+	}()
+
+	select {
+	case <-waitChan:
+		log.Printf("All background tasks completed gracefully in %v", time.Since(taskShutdownStart))
+	case <-shutdownCtx.Done():
+		log.Printf("Shutdown timeout of %v reached, some tasks may not have completed", shutdownTimeout)
+	}
+
+	// Perform final resource cleanup
+	cleanupResources()
+
+	log.Println("Server gracefully stopped")
+}
+
+// cleanupResources handles the cleanup of all application resources
+func cleanupResources() {
+	log.Println("Performing final resource cleanup...")
+
+	// Close the GeoIP database if it was opened
+	if geoDB != nil {
+		log.Println("Closing GeoIP database...")
+		geoDB.Close()
+	}
+
+	// Close the Bird connection pool
+	if birdPool != nil {
+		log.Println("Closing Bird connection pool...")
+		birdPool.Close()
+	}
+
+	// Clear global data structures
+	log.Println("Clearing global data structures...")
+
+	sessionMutex.Lock()
+	for k := range localSessions {
+		delete(localSessions, k)
+	}
+	sessionMutex.Unlock()
+
+	metricMutex.Lock()
+	for k := range localMetrics {
+		delete(localMetrics, k)
+	}
+	metricMutex.Unlock()
+
+	trafficMutex.Lock()
+	for k := range localTrafficRate {
+		delete(localTrafficRate, k)
+	}
+	trafficMutex.Unlock()
+
+	rttMutex.Lock()
+	for k := range rttTrackers {
+		delete(rttTrackers, k)
+	}
+	rttMutex.Unlock()
+
+	log.Println("Resource cleanup completed")
 }

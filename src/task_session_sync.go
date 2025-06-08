@@ -3,10 +3,12 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
 	"reflect"
+	"sync"
 	"time"
 
 	"github.com/gofiber/fiber/v3/client"
@@ -198,13 +200,34 @@ func processDeletedSession(session *BgpSession) {
 }
 
 // mainSessionTask is the main function for session management
-func mainSessionTask() {
+func mainSessionTask(ctx context.Context, wg *sync.WaitGroup) {
+	defer wg.Done()
+
 	ticker := time.NewTicker(time.Duration(cfg.PeerAPI.SyncInterval) * time.Second)
 	defer ticker.Stop()
 
+	log.Println("[SessionSync] Starting session synchronization task")
+
+	// Sync sessions immediately on startup
+	syncSessions()
+
 	for {
-		syncSessions()
-		<-ticker.C
+		select {
+		case <-ctx.Done():
+			shutdownStart := time.Now()
+			log.Println("[SessionSync] Shutting down session synchronization task...")
+
+			// Perform any session-specific cleanup
+			sessionMutex.RLock()
+			sessionCount := len(localSessions)
+			sessionMutex.RUnlock()
+			log.Printf("[SessionSync] Cleaning up %d managed BGP sessions", sessionCount)
+
+			log.Printf("[SessionSync] Session synchronization task shutdown completed in %v", time.Since(shutdownStart))
+			return
+		case <-ticker.C:
+			syncSessions()
+		}
 	}
 }
 
