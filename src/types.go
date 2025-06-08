@@ -15,10 +15,18 @@ type PeerApiResponse struct {
 	Data    json.RawMessage `json:"data"` // Defer parsing of `data`
 }
 
+type NodePassthroughRequest struct {
+	ASN  uint `json:"asn"`
+	Data struct {
+		LinkType      string   `json:"linkType"`
+		BGPExtensions []string `json:"bgpExtensions"`
+	} `json:"data"`
+}
+
 // Agent API Session types
 type BgpSession struct {
 	UUID          string   `json:"uuid"`
-	ASN           int      `json:"asn"`
+	ASN           uint     `json:"asn"`
 	Status        int      `json:"status"`
 	IPv4          string   `json:"ipv4"`
 	IPv6          string   `json:"ipv6"`
@@ -49,7 +57,7 @@ type SessionReportRequest struct {
 
 type SessionMetric struct {
 	UUID      string          `json:"uuid"`
-	ASN       int             `json:"asn"`
+	ASN       uint            `json:"asn"`
 	Timestamp int64           `json:"timestamp"`
 	BGP       []BGPMetric     `json:"bgp"`
 	Interface InterfaceMetric `json:"interface"`

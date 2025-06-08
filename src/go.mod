@@ -6,6 +6,7 @@ replace github.com/iedon/peerapi-agent/bird => ./bird
 
 require (
 	github.com/gofiber/fiber/v3 v3.0.0-beta.4
+	github.com/golang-jwt/jwt/v5 v5.2.2
 	github.com/matishsiao/goInfo v0.0.0-20241216093258-66a9250504d6
 	golang.org/x/crypto v0.31.0
 )

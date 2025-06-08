@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/matishsiao/goInfo"
@@ -318,4 +319,63 @@ var interfaceFlagMap = map[uint64]string{
 	0x10000: "LOWER_UP",
 	0x20000: "DORMANT",
 	0x40000: "ECHO",
+}
+
+func _getRandomUnusedPort(proto string) (int, error) {
+	var addr *net.UDPAddr
+	var err error
+
+	switch proto {
+	case "tcp":
+		// Use port :0 to let the OS choose a free port
+		l, err := net.Listen("tcp", ":0")
+		if err != nil {
+			return 0, err
+		}
+		defer l.Close()
+		return l.Addr().(*net.TCPAddr).Port, nil
+	case "udp":
+		addr, err = net.ResolveUDPAddr("udp", ":0")
+		if err != nil {
+			return 0, err
+		}
+		c, err := net.ListenUDP("udp", addr)
+		if err != nil {
+			return 0, err
+		}
+		defer c.Close()
+		return c.LocalAddr().(*net.UDPAddr).Port, nil
+	default:
+		return 0, fmt.Errorf("unsupported protocol: %s", proto)
+	}
+}
+
+var (
+	reservedPorts      = make(map[int]int64)
+	reservedPortsMutex sync.Mutex
+)
+
+// GetRandomUnusedPort returns a random unused port based on protocol ("tcp" or "udp")
+func getRandomUnusedPort(proto string) (int, error) {
+	const maxRetries = 10
+
+	for i := 0; i < maxRetries; i++ {
+		port, err := _getRandomUnusedPort(proto)
+		if err != nil {
+			return 0, fmt.Errorf("failed to get random unused port: %w", err)
+		}
+		reservedPortsMutex.Lock()
+		if expireTimestamp, exists := reservedPorts[port]; exists {
+			if time.Now().Unix() < expireTimestamp {
+				// Port is reserved, skip it
+				reservedPortsMutex.Unlock()
+				continue // try again
+			}
+		}
+		reservedPorts[port] = time.Now().Unix() + 300
+		reservedPortsMutex.Unlock()
+		return port, nil
+	}
+
+	return 0, fmt.Errorf("unable to find unused port after %d attempts", maxRetries)
 }

@@ -129,22 +129,5 @@ func teardownViolatingSession(session *BgpSession) {
 	err := reportNewStatusToCenter(session.UUID, PEERING_STATUS_TEARDOWN)
 	if err != nil {
 		log.Printf("<%s> Failed to report teardown status: %v", session.UUID, err)
-		// Continue anyway to update local metrics
-	}
-
-	// Update local metrics to reflect the teardown
-	mutex.Lock()
-	defer mutex.Unlock()
-
-	metric, exist := localMetrics[session.UUID]
-	if exist {
-		metric.Timestamp = time.Now().UnixMilli()
-		if len(metric.BGP) > 0 {
-			for i := range metric.BGP {
-				metric.BGP[i].State = "teardown"
-				metric.BGP[i].Info = "Session torn down due to geo rules"
-			}
-		}
-		localMetrics[session.UUID] = metric
 	}
 }

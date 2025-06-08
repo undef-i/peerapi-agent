@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"maps"
 	"reflect"
 	"time"
 
@@ -251,54 +250,4 @@ func syncSessions() {
 	mutex.Lock()
 	localSessions = nextLocal
 	mutex.Unlock()
-}
-
-// cleanupSessions removes sessions that are problematic or need teardown
-func cleanupSessions() {
-	mutex.RLock()
-	sessionsToProcess := maps.Clone(localSessions)
-	mutex.RUnlock()
-
-	for _, session := range sessionsToProcess {
-		// Skip sessions that are not enabled
-		if session.Status != PEERING_STATUS_ENABLED && session.Status != PEERING_STATUS_PROBLEM {
-			continue
-		}
-
-		// Check if the session needs to be torn down
-		if checkSessionGeoLocation(&session) {
-			log.Printf("[CleanupSessions] Session %s will be torn down due to geo restrictions", session.UUID)
-			deleteSession(&session)
-			// Report new status to the center
-			if err := reportNewStatusToCenter(session.UUID, PEERING_STATUS_DELETED); err != nil {
-				log.Printf("[CleanupSessions] Failed to report deletion of session %s: %v", session.UUID, err)
-			}
-		}
-	}
-}
-
-// cleanupTask runs periodically to clean up sessions
-func cleanupTask() {
-	// Run every 15 minutes by default
-	interval := 15 * time.Minute
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-
-	for range ticker.C {
-		cleanupSessions()
-	}
-}
-
-// syncTask initiates periodic synchronization with the PeerAPI server
-func syncTask() {
-	// First run immediately when the service starts
-	syncSessions()
-
-	// Then set up regular interval
-	ticker := time.NewTicker(time.Duration(cfg.PeerAPI.SyncInterval) * time.Second)
-	defer ticker.Stop()
-
-	for range ticker.C {
-		syncSessions()
-	}
 }

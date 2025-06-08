@@ -19,38 +19,40 @@ type serverConfig struct {
 }
 
 type peerApiCenterConfig struct {
-	URL               string   `json:"url"`               // URL of the PeerAPI center server
-	Secret            string   `json:"secret"`            // Secret key for PeerAPI center authentication
-	RequestTimeout    int      `json:"requestTimeout"`    // Timeout for requests to the PeerAPI center
-	RouterUUID        string   `json:"routerUuid"`        // UUID of this router from PeerAPI center server
-	AgentSecret       string   `json:"agentSecret"`       // Secret key for agent authentication
-	HeartbeatInterval int      `json:"heartbeatInterval"` // Heartbeat interval in seconds
-	SyncInterval      int      `json:"syncInterval"`      // Session sync interval in seconds
-	MetricInterval    int      `json:"metricInterval"`
-	WanInterfaces     []string `json:"wanInterfaces"` // List of WAN interfaces to monitor their traffic
+	URL                         string   `json:"url"`               // URL of the PeerAPI center server
+	Secret                      string   `json:"secret"`            // Secret key for PeerAPI center authentication
+	RequestTimeout              int      `json:"requestTimeout"`    // Timeout for requests to the PeerAPI center
+	RouterUUID                  string   `json:"routerUuid"`        // UUID of this router from PeerAPI center server
+	AgentSecret                 string   `json:"agentSecret"`       // Secret key for agent authentication
+	HeartbeatInterval           int      `json:"heartbeatInterval"` // Heartbeat interval in seconds
+	SyncInterval                int      `json:"syncInterval"`      // Session sync interval in seconds
+	MetricInterval              int      `json:"metricInterval"`
+	WanInterfaces               []string `json:"wanInterfaces"` // List of WAN interfaces to monitor their traffic
+	SessionPassthroughJwtSecert string   `json:"sessionPassthroughJwtSecert"`
 }
 
 type birdConfig struct {
-	ControlSocket           string `json:"controlSocket"`
-	PoolSize                int    `json:"poolSize"`                // Number of connections to the BIRD control socket
-	PoolSizeMax             int    `json:"poolSizeMax"`             // Maximum size of the connection pool
-	BGPPeerConfDir          string `json:"bgpPeerConfDir"`          // Directory for BGP peer configuration files
-	BGPPeerConfTemplateFile string `json:"bgpPeerConfTemplateFile"` // Template for BGP peer configuration files
-	BGPPeerConfTemplate     *template.Template
+	ControlSocket           string             `json:"controlSocket"`
+	PoolSize                int                `json:"poolSize"`                // Number of connections to the BIRD control socket
+	PoolSizeMax             int                `json:"poolSizeMax"`             // Maximum size of the connection pool
+	BGPPeerConfDir          string             `json:"bgpPeerConfDir"`          // Directory for BGP peer configuration files
+	BGPPeerConfTemplateFile string             `json:"bgpPeerConfTemplateFile"` // Template for BGP peer configuration files
+	BGPPeerConfTemplate     *template.Template `json:"-"`
 }
 
 type wireGuardConfig struct {
-	WgConfDir                      string `json:"wgConfDir"`      // Directory for WireGuard configuration files
-	IPv4                           string `json:"ipv4"`           // IPv4 address for WireGuard interface
-	IPv6                           string `json:"ipv6"`           // IPv6 address for WireGuard interface
-	IPv6LinkLocal                  string `json:"ipv6LinkLocal"`  // IPv6 link-local address for WireGuard interface
-	PrivateKeyPath                 string `json:"privateKeyPath"` // Private key for WireGuard interface
-	PublicKeyPath                  string `json:"publicKeyPath"`  // Public key for WireGuard interface
-	PrivateKey                     string
-	PublicKey                      string
-	AllocatePort                   bool `json:"allocatePort"` // Whether to allocate a port for WireGuard
-	DN42BandwidthCommunity         int  `json:"dn42BandwidthCommunity"`
-	DN42InterfaceSecurityCommunity int  `json:"dn42InterfaceSecurityCommunity"`
+	WgConfDir                      string `json:"wgConfDir"`         // Directory for WireGuard configuration files
+	IPv4                           string `json:"ipv4"`              // IPv4 address for WireGuard interface
+	IPv6                           string `json:"ipv6"`              // IPv6 address for WireGuard interface
+	IPv6LinkLocal                  string `json:"ipv6LinkLocal"`     // IPv6 link-local address for WireGuard interface
+	LocalEndpointHost              string `json:"LocalEndpointHost"` // Local endpoint for WireGuard interface
+	PrivateKeyPath                 string `json:"privateKeyPath"`    // Private key for WireGuard interface
+	PublicKeyPath                  string `json:"publicKeyPath"`     // Public key for WireGuard interface
+	PrivateKey                     string `json:"-"`
+	PublicKey                      string `json:"-"`
+	PersistentKeepaliveInterval    int    `json:"persistentKeepaliveInterval"` // Persistent keepalive interval in seconds
+	DN42BandwidthCommunity         int    `json:"dn42BandwidthCommunity"`
+	DN42InterfaceSecurityCommunity int    `json:"dn42InterfaceSecurityCommunity"`
 }
 
 type metricConfig struct {

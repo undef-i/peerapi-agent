@@ -10,12 +10,12 @@ import (
 )
 
 const (
-	bearerScheme = "Bearer "
+	bearerScheme = "Bearer\x20"
 )
 
 // verifyBearerToken verifies if the request has a valid bearer token
 // The token should be a bcrypt hash of agentSecret+routerUuid
-func verifyBearerToken(c fiber.Ctx, token, routerUUID string) bool {
+func verifyBearerToken(c fiber.Ctx, token string) bool {
 	authHeader := c.Get("Authorization")
 	if !strings.HasPrefix(authHeader, bearerScheme) {
 		return false
@@ -50,9 +50,11 @@ func generateToken() (string, error) {
 // Protected middleware protects routes with bearer token authentication
 func Protected() fiber.Handler {
 	return func(c fiber.Ctx) error {
-		if !verifyBearerToken(c, "", c.Params("router")) {
+		if !verifyBearerToken(c, cfg.PeerAPI.Secret) {
 			return c.Status(fiber.StatusUnauthorized).JSON(AgentApiResponse{
-				Code: 401,
+				Code:    401,
+				Message: "Unauthorized",
+				Data:    nil,
 			})
 		}
 		return c.Next()

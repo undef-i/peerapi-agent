@@ -20,7 +20,8 @@
     "heartbeatInterval": 30,
     "syncInterval": 300,
     "metricInterval": 60,
-    "wanInterfaces": ["eth0"]
+    "wanInterfaces": ["eth0"],
+    "sessionPassthroughJwtSecert": "YFKBBPQJVVQWZVYFJYQ"
   },
 
   "bird": {
@@ -48,8 +49,19 @@
     "ipv6LinkLocal": "fe80::118",
     "privateKeyPath": "/etc/wireguard/privateKey",
     "publicKeyPath": "/etc/wireguard/publicKey",
-    "allocatePort": true,
+    "persistentKeepaliveInterval": 25,
+    "localEndpointHost":"jp-118.dn42.iedon.net",
     "dn42BandwidthCommunity": 24,
     "dn42InterfaceSecurityCommunity": 34
+  },
+
+  "gre": {
+    "ipv4": "172.23.91.132",
+    "ipv6": "fd42:4242:2189:118::1",
+    "ipv6LinkLocal": "fe80::118",
+    "localEndpointHost4":"1.1.1.1",
+    "localEndpointHost6":"fd00::1",
+    "dn42BandwidthCommunity": 24,
+    "dn42InterfaceSecurityCommunity": 31
   }
 }

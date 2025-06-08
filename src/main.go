@@ -95,7 +95,6 @@ func main() {
 	go metricTask()
 	go bandwidthMonitorTask()
 	go geoCheckTask()
-	go cleanupTask()
 
 	log.Fatal(app.Listen(cfg.Server.Listen))
 }
