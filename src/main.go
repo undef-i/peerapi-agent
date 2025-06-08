@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"runtime"
+	"sync"
 	"time"
 
 	"github.com/gofiber/fiber/v3"
@@ -25,6 +26,13 @@ var (
 	birdPool *bird.BirdPool
 	geoDB    *geoip2.Reader // Global GeoIP database reader
 )
+
+// Global state variables for session management task/metric task/monitoring task
+var localSessions = make(map[string]BgpSession)
+var localMetrics = make(map[string]SessionMetric)
+var localTrafficRate = make(map[string]TrafficRate)
+var mutex sync.RWMutex
+var bwMonitorMutex sync.Mutex
 
 func initBirdConnectionPool() error {
 	var err error
@@ -83,8 +91,11 @@ func main() {
 
 	// Start background tasks
 	go heartbeatTask()
-	go syncTask()
+	go mainSessionTask()
 	go metricTask()
+	go bandwidthMonitorTask()
+	go geoCheckTask()
+	go cleanupTask()
 
 	log.Fatal(app.Listen(cfg.Server.Listen))
 }

@@ -51,7 +51,7 @@ type SessionMetric struct {
 	UUID      string          `json:"uuid"`
 	ASN       int             `json:"asn"`
 	Timestamp int64           `json:"timestamp"`
-	BGP       BGPMetric       `json:"bgp"`
+	BGP       []BGPMetric     `json:"bgp"`
 	Interface InterfaceMetric `json:"interface"`
 	RTT       RTT             `json:"rtt"`
 }
@@ -88,14 +88,9 @@ type InterfaceMetric struct {
 }
 
 type InterfaceTrafficMetric struct {
-	RX TrafficMetrics `json:"rx"`
-	TX TrafficMetrics `json:"tx"`
-}
-
-type TrafficMetrics struct {
-	Total   int64      `json:"total"`
-	Current int64      `json:"current"`
-	Metric  [][2]int64 `json:"metric"` // each metric is a pair [timestamp, value]
+	Total   []int64    `json:"total"`   // [Tx, Rx]
+	Current []int64    `json:"current"` // [Tx, Rx]
+	Metric  [][3]int64 `json:"metric"`  // each metric is a pair [timestamp, Tx, Rx]
 }
 
 type RTT struct {

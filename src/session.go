@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path"
+	"slices"
 	"strconv"
 )
 
@@ -84,7 +85,7 @@ func configureInterface(session *BgpSession) error {
 }
 
 func deleteInterface(iface string) error {
-	if exist, _ := InterfaceExists(iface); !exist {
+	if exist, _ := interfaceExists(iface); !exist {
 		exec.Command("ip", "link", "del", "dev", iface).Run() // dismiss error
 		return nil
 	}
@@ -110,8 +111,8 @@ func configureBird(session *BgpSession) error {
 		ifSecCommunity = cfg.WireGuard.DN42InterfaceSecurityCommunity
 	}
 
-	mpBGP := ContainsString(session.Extensions, "mp-bgp")
-	extendedNexthop := ContainsString(session.Extensions, "extended-nexthop")
+	mpBGP := slices.Contains(session.Extensions, "mp-bgp")
+	extendedNexthop := slices.Contains(session.Extensions, "extended-nexthop")
 
 	// Create output file
 	outFile, err := os.Create(confPath)

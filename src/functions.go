@@ -14,7 +14,7 @@ import (
 	"github.com/oschwald/geoip2-golang"
 )
 
-func GetOsUname() string {
+func getOsUname() string {
 	gi, _ := goInfo.GetInfo()
 	platform := gi.Platform
 	if strings.ToLower(platform) == "unknown" {
@@ -48,19 +48,19 @@ func countConnections(path string) (int, error) {
 	return count, scanner.Err()
 }
 
-func GetTcpConnections() int {
+func getTcpConnections() int {
 	tcp4, _ := countConnections("/proc/net/tcp")
 	tcp6, _ := countConnections("/proc/net/tcp6")
 	return tcp4 + tcp6
 }
 
-func GetUdpConnections() int {
+func getUdpConnections() int {
 	udp4, _ := countConnections("/proc/net/udp")
 	udp6, _ := countConnections("/proc/net/udp6")
 	return udp4 + udp6
 }
 
-func GetUptimeSeconds() float64 {
+func getUptimeSeconds() float64 {
 	data, err := os.ReadFile("/proc/uptime")
 	if err != nil {
 		return 0
@@ -73,7 +73,7 @@ func GetUptimeSeconds() float64 {
 	return uptime
 }
 
-func GetInterfaceTraffic(interfaces []string) (rxTotal, txTotal uint64, err error) {
+func getInterfaceTraffic(interfaces []string) (rxTotal, txTotal uint64, err error) {
 	file, err := os.Open("/proc/net/dev")
 	if err != nil {
 		return 0, 0, err
@@ -148,7 +148,7 @@ func getLoadAverage() (load1, load5, load15 float64, err error) {
 	return
 }
 
-func GetLoadAverageStr() string {
+func getLoadAverageStr() string {
 	load1, load5, load15, err := getLoadAverage()
 	if err != nil {
 		return ""
@@ -156,16 +156,7 @@ func GetLoadAverageStr() string {
 	return fmt.Sprintf("%.2f %.2f %.2f", load1, load5, load15)
 }
 
-func ContainsString(slice []string, item string) bool {
-	for _, s := range slice {
-		if s == item {
-			return true
-		}
-	}
-	return false
-}
-
-func InterfaceExists(iface string) (exist bool, err error) {
+func interfaceExists(iface string) (exist bool, err error) {
 	file, err := os.Open("/proc/net/dev")
 	if err != nil {
 		return false, err
@@ -209,7 +200,7 @@ func tcping(address string, timeout time.Duration) int {
 	return int(time.Since(start).Milliseconds())
 }
 
-func TcpingAverage(address string, tries, timeoutSeconds int) int {
+func tcpingAverage(address string, tries, timeoutSeconds int) int {
 	var total int
 	for range tries {
 		delay := tcping(address, time.Duration(timeoutSeconds)*time.Second)
@@ -246,8 +237,8 @@ func resolveToIP(host string) (net.IP, error) {
 	return ips[0], nil // fallback to first (IPv6)
 }
 
-// GeoIPCountryCode returns the 2-letter country code from IP/hostname
-func GeoIPCountryCode(db *geoip2.Reader, input string) (string, error) {
+// geoIPCountryCode returns the 2-letter country code from IP/hostname
+func geoIPCountryCode(db *geoip2.Reader, input string) (string, error) {
 	host := extractHost(input)
 	ip, err := resolveToIP(host)
 	if err != nil {
@@ -260,8 +251,8 @@ func GeoIPCountryCode(db *geoip2.Reader, input string) (string, error) {
 	return strings.ToUpper(record.Country.IsoCode), nil
 }
 
-// GetInterfaceMTU returns the MTU of the given interface from /sys/class/net/<iface>/mtu
-func GetInterfaceMTU(name string) (int, error) {
+// getInterfaceMTU returns the MTU of the given interface from /sys/class/net/<iface>/mtu
+func getInterfaceMTU(name string) (int, error) {
 	data, err := os.ReadFile("/sys/class/net/" + name + "/mtu")
 	if err != nil {
 		return 0, fmt.Errorf("failed to read MTU: %w", err)
@@ -274,7 +265,7 @@ func GetInterfaceMTU(name string) (int, error) {
 	return mtu, nil
 }
 
-func GetInterfaceMAC(ifaceName string) (string, error) {
+func getInterfaceMAC(ifaceName string) (string, error) {
 	iface, err := net.InterfaceByName(ifaceName)
 	if err != nil {
 		return "", err
@@ -286,8 +277,8 @@ func GetInterfaceMAC(ifaceName string) (string, error) {
 	return mac, nil
 }
 
-// GetInterfaceFlags returns the list of string flags (e.g. UP, BROADCAST) for the given interface
-func GetInterfaceFlags(name string) (string, error) {
+// getInterfaceFlags returns the list of string flags (e.g. UP, BROADCAST) for the given interface
+func getInterfaceFlags(name string) (string, error) {
 	data, err := os.ReadFile("/sys/class/net/" + name + "/flags")
 	if err != nil {
 		return "", fmt.Errorf("failed to read flags: %w", err)
