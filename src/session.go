@@ -10,6 +10,7 @@ import (
 	"path"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -74,18 +75,19 @@ func configureWireguardInterface(ctx context.Context, session *BgpSession) error
 		log.Printf("Warning: Failed to delete existing interface %s: %v", session.Interface, err)
 		// Continue anyway as we'll try to recreate it
 	}
-
 	// Create the new interface
-	cmd := exec.CommandContext(ctx, "ip", "link", "add", "dev", session.Interface, "type", "wireguard")
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to create wireguard interface: %v", err)
-	}
+	cmd := exec.CommandContext(ctx, cfg.Bird.IPCommandPath, "link", "add", "dev", session.Interface, "type", "wireguard")
+	outputBytes, err := cmd.CombinedOutput()
+	output := string(outputBytes)
 
+	if err != nil {
+		return fmt.Errorf("failed to create wireguard interface: %v (output: \"%s\")", err, strings.TrimSpace(output))
+	}
 	// Parse session data to get the port from passthrough JWT
 	var port int
-	if session.Data != "" {
+	if len(session.Data) > 0 {
 		var sessionData SessionData
-		if err := json.Unmarshal([]byte(session.Data), &sessionData); err != nil {
+		if err := json.Unmarshal(session.Data, &sessionData); err != nil {
 			log.Printf("Warning: Failed to parse session data: %v", err)
 		} else if sessionData.Passthrough != "" {
 			// Parse the JWT token from passthrough
@@ -101,10 +103,20 @@ func configureWireguardInterface(ctx context.Context, session *BgpSession) error
 				return fmt.Errorf("failed to decode session passthrough data: %v", err)
 			} else if claims, ok := token.Claims.(jwt.MapClaims); ok && token.Valid {
 				if portValue, exists := claims["port"]; exists {
-					// Try to convert the port value to int
-					port, ok = portValue.(int)
-					if !ok {
-						return fmt.Errorf("failed to decode port for wireguard: %v", err)
+					// In JSON numbers are often decoded as float64
+					switch v := portValue.(type) {
+					case float64:
+						port = int(v)
+					case int:
+						port = v
+					case json.Number:
+						if p, err := v.Int64(); err == nil {
+							port = int(p)
+						} else {
+							return fmt.Errorf("failed to decode port(current value: %v) for wireguard: %v", claims, err)
+						}
+					default:
+						return fmt.Errorf("unexpected port value type(current value: %v) for wireguard", claims)
 					}
 				}
 			}
@@ -114,17 +126,24 @@ func configureWireguardInterface(ctx context.Context, session *BgpSession) error
 	// Configure the peer settings
 	wgArgs := []string{
 		"set", session.Interface,
-		"private-key", cfg.WireGuard.PrivateKey,
+		"private-key", cfg.WireGuard.PrivateKeyPath,
 		"listen-port", strconv.Itoa(port),
 		"peer", session.Credential,
-		"endpoint", session.Endpoint,
 		"persistent-keepalive", strconv.Itoa(cfg.WireGuard.PersistentKeepaliveInterval),
 		"allowed-ips", "172.16.0.0/12,10.0.0.0/8,fd00::/8,fe80::/10",
 	}
+	if session.Endpoint != "" {
+		wgArgs = append(wgArgs, "endpoint", session.Endpoint)
+	}
 
-	cmd = exec.CommandContext(ctx, "wg", wgArgs...)
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to configure wireguard: %v", err)
+	cmd = exec.CommandContext(ctx, cfg.WireGuard.WGCommandPath, wgArgs...)
+
+	// Capture both stdout and stderr
+	outputBytes, err = cmd.CombinedOutput()
+	output = string(outputBytes)
+
+	if err != nil {
+		return fmt.Errorf("failed to configure wireguard: %v (output: \"%s\")", err, strings.TrimSpace(output))
 	}
 
 	// Configure IP addresses
@@ -133,13 +152,16 @@ func configureWireguardInterface(ctx context.Context, session *BgpSession) error
 	}
 
 	// Set MTU
-	cmd = exec.CommandContext(ctx, "ip", "link", "set", "mtu", strconv.Itoa(session.MTU), "dev", session.Interface)
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to set MTU: %v", err)
+	cmd = exec.CommandContext(ctx, cfg.Bird.IPCommandPath, "link", "set", "mtu", strconv.Itoa(session.MTU), "dev", session.Interface)
+	mtuOutputBytes, mtuErr := cmd.CombinedOutput()
+	mtuOutput := string(mtuOutputBytes)
+
+	if mtuErr != nil {
+		return fmt.Errorf("failed to set MTU: %v (output: \"%s\")", mtuErr, strings.TrimSpace(mtuOutput))
 	}
 
 	// Bring up interface
-	cmd = exec.CommandContext(ctx, "ip", "link", "set", "up", "dev", session.Interface)
+	cmd = exec.CommandContext(ctx, cfg.Bird.IPCommandPath, "link", "set", "up", "dev", session.Interface)
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("failed to bring up interface: %v", err)
 	}
@@ -163,7 +185,7 @@ func configureGreInterface(ctx context.Context, session *BgpSession) error {
 
 	if isIPv6 {
 		// IPv6 GRE tunnel (ip6gre)
-		cmd = exec.CommandContext(ctx, "ip", "-6", "tunnel", "add", session.Interface,
+		cmd = exec.CommandContext(ctx, cfg.Bird.IPCommandPath, "-6", "tunnel", "add", session.Interface,
 			"mode", "ip6gre",
 			"local", cfg.GRE.LocalEndpointHost6,
 			"remote", session.Endpoint)
@@ -172,7 +194,7 @@ func configureGreInterface(ctx context.Context, session *BgpSession) error {
 			session.Interface, cfg.GRE.LocalEndpointHost6, session.Endpoint)
 	} else {
 		// IPv4 GRE tunnel (gre)
-		cmd = exec.CommandContext(ctx, "ip", "tunnel", "add", session.Interface,
+		cmd = exec.CommandContext(ctx, cfg.Bird.IPCommandPath, "tunnel", "add", session.Interface,
 			"mode", "gre",
 			"local", cfg.GRE.LocalEndpointHost4,
 			"remote", session.Endpoint)
@@ -180,26 +202,33 @@ func configureGreInterface(ctx context.Context, session *BgpSession) error {
 		log.Printf("Creating IPv4 GRE tunnel: %s with local: %s remote: %s",
 			session.Interface, cfg.GRE.LocalEndpointHost4, session.Endpoint)
 	}
+	outputBytes, err := cmd.CombinedOutput()
+	output := string(outputBytes)
 
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to create %s tunnel: %v", session.Type, err)
+	if err != nil {
+		return fmt.Errorf("failed to create %s tunnel: %v (output: \"%s\")", session.Type, err, strings.TrimSpace(output))
 	}
 
 	// Configure IP addresses
 	if err := configureIPAddresses(ctx, session); err != nil {
 		return err
 	}
-
 	// Set MTU
-	cmd = exec.CommandContext(ctx, "ip", "link", "set", "mtu", strconv.Itoa(session.MTU), "dev", session.Interface)
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to set MTU: %v", err)
+	cmd = exec.CommandContext(ctx, cfg.Bird.IPCommandPath, "link", "set", "mtu", strconv.Itoa(session.MTU), "dev", session.Interface)
+	mtuOutputBytes, mtuErr := cmd.CombinedOutput()
+	mtuOutput := string(mtuOutputBytes)
+
+	if mtuErr != nil {
+		return fmt.Errorf("failed to set GRE MTU: %v (output: \"%s\")", mtuErr, strings.TrimSpace(mtuOutput))
 	}
 
 	// Bring up interface
-	cmd = exec.CommandContext(ctx, "ip", "link", "set", "up", "dev", session.Interface)
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to bring up interface: %v", err)
+	cmd = exec.CommandContext(ctx, cfg.Bird.IPCommandPath, "link", "set", "up", "dev", session.Interface)
+	upOutputBytes, upErr := cmd.CombinedOutput()
+	upOutput := string(upOutputBytes)
+
+	if upErr != nil {
+		return fmt.Errorf("failed to bring up GRE interface: %v (output: \"%s\")", upErr, strings.TrimSpace(upOutput))
 	}
 
 	log.Printf("Successfully configured %s interface %s for session %s",
@@ -227,33 +256,36 @@ func configureIPAddresses(ctx context.Context, session *BgpSession) error {
 		localIPv6 = cfg.WireGuard.IPv6
 		localIPv6LinkLocal = cfg.WireGuard.IPv6LinkLocal
 	}
-
 	// Configure IPv4 if provided
 	if session.IPv4 != "" {
-		cmd := exec.CommandContext(ctx, "ip", "addr", "add", "dev", session.Interface,
+		cmd := exec.CommandContext(ctx, cfg.Bird.IPCommandPath, "addr", "add", "dev", session.Interface,
 			localIPv4+"/32", "peer", session.IPv4+"/32")
-		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("failed to add IPv4: %v", err)
-		}
-		log.Printf("Added IPv4 address %s to interface %s", session.IPv4, session.Interface)
-	}
+		ipv4OutputBytes, ipv4Err := cmd.CombinedOutput()
+		ipv4Output := string(ipv4OutputBytes)
 
+		if ipv4Err != nil {
+			return fmt.Errorf("failed to add IPv4: %v (output: \"%s\")", ipv4Err, strings.TrimSpace(ipv4Output))
+		}
+	}
 	// Configure IPv6 Link-Local if provided, otherwise use global IPv6
 	if session.IPv6LinkLocal != "" {
-		cmd := exec.CommandContext(ctx, "ip", "addr", "add", "dev", session.Interface,
+		cmd := exec.CommandContext(ctx, cfg.Bird.IPCommandPath, "addr", "add", "dev", session.Interface,
 			localIPv6LinkLocal+"/64", "peer", session.IPv6LinkLocal+"/64")
-		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("failed to add IPv6 link-local: %v", err)
+		ipv6llOutputBytes, ipv6llErr := cmd.CombinedOutput()
+		ipv6llOutput := string(ipv6llOutputBytes)
+
+		if ipv6llErr != nil {
+			return fmt.Errorf("failed to add IPv6 link-local: %v (output: \"%s\")", ipv6llErr, strings.TrimSpace(ipv6llOutput))
 		}
-		log.Printf("Added IPv6 link-local address %s to interface %s",
-			session.IPv6LinkLocal, session.Interface)
 	} else if session.IPv6 != "" {
-		cmd := exec.CommandContext(ctx, "ip", "addr", "add", "dev", session.Interface,
+		cmd := exec.CommandContext(ctx, cfg.Bird.IPCommandPath, "addr", "add", "dev", session.Interface,
 			localIPv6+"/128", "peer", session.IPv6+"/128")
-		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("failed to add IPv6: %v", err)
+		ipv6OutputBytes, ipv6Err := cmd.CombinedOutput()
+		ipv6Output := string(ipv6OutputBytes)
+
+		if ipv6Err != nil {
+			return fmt.Errorf("failed to add IPv6: %v (output: \"%s\")", ipv6Err, strings.TrimSpace(ipv6Output))
 		}
-		log.Printf("Added IPv6 address %s to interface %s", session.IPv6, session.Interface)
 	}
 
 	return nil
@@ -277,16 +309,24 @@ func deleteInterface(iface string) error {
 	}
 
 	// Bring the interface down first
-	downCmd := exec.CommandContext(ctx, "ip", "link", "set", "down", "dev", iface)
-	if err := downCmd.Run(); err != nil {
-		log.Printf("Warning: Failed to bring down interface %s: %v", iface, err)
+	downCmd := exec.CommandContext(ctx, cfg.Bird.IPCommandPath, "link", "set", "down", "dev", iface)
+	downOutputBytes, downErr := downCmd.CombinedOutput()
+	downOutput := string(downOutputBytes)
+
+	if downErr != nil {
+		log.Printf("Warning: Failed to bring down interface %s: %v (output: \"%s\")", iface, downErr, strings.TrimSpace(downOutput))
 		// Continue with deletion anyway
+	} else {
+		log.Printf("Interface %s set down successfully (output: \"%s\")", iface, strings.TrimSpace(downOutput))
 	}
 
 	// Delete the interface
-	delCmd := exec.CommandContext(ctx, "ip", "link", "del", "dev", iface)
-	if err := delCmd.Run(); err != nil {
-		return fmt.Errorf("failed to delete interface %s: %v", iface, err)
+	delCmd := exec.CommandContext(ctx, cfg.Bird.IPCommandPath, "link", "del", "dev", iface)
+	delOutputBytes, delErr := delCmd.CombinedOutput()
+	delOutput := string(delOutputBytes)
+
+	if delErr != nil {
+		return fmt.Errorf("failed to delete interface %s: %v (output: \"%s\")", iface, delErr, strings.TrimSpace(delOutput))
 	}
 
 	log.Printf("Successfully deleted interface %s", iface)
@@ -493,29 +533,21 @@ func deleteBird(session *BgpSession) error {
 
 // configureSession sets up both the network interface and BIRD configuration for a BGP session
 func configureSession(session *BgpSession) error {
-	log.Printf("Configuring BGP session %s (ASN: %d, Interface: %s)",
-		session.UUID, session.ASN, session.Interface)
-
 	// First, configure the network interface
 	if err := configureInterface(session); err != nil {
-		log.Printf("Failed to configure interface for session %s: %v", session.UUID, err)
 		return fmt.Errorf("interface configuration failed: %w", err)
 	}
 
 	// Then, configure the BIRD routing daemon
 	if err := configureBird(session); err != nil {
-		log.Printf("Failed to configure BIRD for session %s: %v", session.UUID, err)
 		return fmt.Errorf("BIRD configuration failed: %w", err)
 	}
 
-	log.Printf("Successfully configured session %s", session.UUID)
 	return nil
 }
 
 // deleteSession tears down a BGP session by removing both the interface and BIRD configuration
 func deleteSession(session *BgpSession) error {
-	log.Printf("Deleting BGP session %s (interface: %s)", session.UUID, session.Interface)
-
 	// First, delete the network interface
 	var interfaceErr error
 	if err := deleteInterface(session.Interface); err != nil {
@@ -536,6 +568,5 @@ func deleteSession(session *BgpSession) error {
 		return birdErr
 	}
 
-	log.Printf("Successfully deleted session %s", session.UUID)
 	return nil
 }

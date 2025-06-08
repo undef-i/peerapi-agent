@@ -129,20 +129,28 @@ func reportNewStatusToCenter(sessionUUID string, status int) error {
 func processNewSession(session *BgpSession, nextLocal map[string]BgpSession) {
 	switch session.Status {
 	case PEERING_STATUS_QUEUED_FOR_SETUP:
-		configureSession(session)
-		err := reportNewStatusToCenter(session.UUID, PEERING_STATUS_ENABLED)
-		if err == nil {
-			session.Status = PEERING_STATUS_ENABLED
-			log.Printf("[SyncSessions] Session %s has been configured and enabled", session.UUID)
-		} else {
-			log.Printf("[SyncSessions] Session %s has been configured but status update failed: %v",
+		err := configureSession(session)
+		if err != nil {
+			log.Printf("[SyncSessions] Failed to configure session %s: %v", session.UUID, err)
+			return
+		}
+		err = reportNewStatusToCenter(session.UUID, PEERING_STATUS_ENABLED)
+		if err != nil {
+			log.Printf("[SyncSessions] Session %s has been set up but status update failed: %v",
 				session.UUID, err)
+		} else {
+			session.Status = PEERING_STATUS_ENABLED
+			log.Printf("[SyncSessions] Session %s has been set up and enabled", session.UUID)
 		}
 	case PEERING_STATUS_ENABLED, PEERING_STATUS_PROBLEM:
-		configureSession(session)
+		err := configureSession(session)
+		if err != nil {
+			log.Printf("[SyncSessions] Failed to configure session %s: %v", session.UUID, err)
+			return
+		}
 		log.Printf("[SyncSessions] Session %s has been configured", session.UUID)
 	default:
-		log.Printf("[SyncSessions] Skipping session %s with status %d", session.UUID, session.Status)
+		log.Printf("[SyncSessions] Skipping and adding session %s with status %d", session.UUID, session.Status)
 	}
 	nextLocal[session.UUID] = *session
 }
@@ -165,27 +173,35 @@ func processChangedSession(newSession *BgpSession, oldSession *BgpSession, nextL
 	case PEERING_STATUS_QUEUED_FOR_DELETE:
 		deleteSession(oldSession)
 		err := reportNewStatusToCenter(newSession.UUID, PEERING_STATUS_DELETED)
-		if err == nil {
-			newSession.Status = PEERING_STATUS_DELETED
-			log.Printf("[SyncSessions] Session %s has been deleted and status updated", newSession.UUID)
-		} else {
+		if err != nil {
 			log.Printf("[SyncSessions] Session %s has been deleted but status update failed: %v",
 				newSession.UUID, err)
+		} else {
+			newSession.Status = PEERING_STATUS_DELETED
+			log.Printf("[SyncSessions] Session %s has been deleted and status updated", newSession.UUID)
 		}
 
 	case PEERING_STATUS_QUEUED_FOR_SETUP:
-		configureSession(newSession)
-		err := reportNewStatusToCenter(newSession.UUID, PEERING_STATUS_ENABLED)
-		if err == nil {
-			newSession.Status = PEERING_STATUS_ENABLED
-			log.Printf("[SyncSessions] Session %s has been reconfigured and enabled", newSession.UUID)
-		} else {
+		err := configureSession(newSession)
+		if err != nil {
+			log.Printf("[SyncSessions] Failed to reconfigure session %s: %v", newSession.UUID, err)
+			return
+		}
+		err = reportNewStatusToCenter(newSession.UUID, PEERING_STATUS_ENABLED)
+		if err != nil {
 			log.Printf("[SyncSessions] Session %s has been reconfigured but status update failed: %v",
 				newSession.UUID, err)
+		} else {
+			newSession.Status = PEERING_STATUS_ENABLED
+			log.Printf("[SyncSessions] Session %s has been reconfigured and enabled", newSession.UUID)
 		}
 
 	case PEERING_STATUS_ENABLED, PEERING_STATUS_PROBLEM:
-		configureSession(newSession)
+		err := configureSession(newSession)
+		if err != nil {
+			log.Printf("[SyncSessions] Failed to reconfigure session %s: %v", newSession.UUID, err)
+			return
+		}
 		log.Printf("[SyncSessions] Session %s has been reconfigured", newSession.UUID)
 	}
 
@@ -195,7 +211,11 @@ func processChangedSession(newSession *BgpSession, oldSession *BgpSession, nextL
 
 // processDeletedSession handles a session that has been removed from the PeerAPI
 func processDeletedSession(session *BgpSession) {
-	deleteSession(session)
+	err := deleteSession(session)
+	if err != nil {
+		log.Printf("[SyncSessions] Session %s has been removed from PeerAPI, but failed to remove locally: %v", session.UUID, err)
+		return
+	}
 	log.Printf("[SyncSessions] Session %s has been removed from PeerAPI", session.UUID)
 }
 
@@ -238,6 +258,10 @@ func syncSessions() {
 		log.Printf("[SyncSessions] Failed to get remote sessions: %v", err)
 		return
 	}
+
+	sessionMutex.RLock()
+	log.Printf("[SyncSessions] Syncing %d sessions with local %d sessions", len(remoteSessions), len(localSessions))
+	sessionMutex.RUnlock()
 
 	nextLocal := make(map[string]BgpSession)
 	remoteSessionUUIDs := make(map[string]struct{})

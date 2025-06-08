@@ -38,10 +38,11 @@ type birdConfig struct {
 	BGPPeerConfDir          string             `json:"bgpPeerConfDir"`          // Directory for BGP peer configuration files
 	BGPPeerConfTemplateFile string             `json:"bgpPeerConfTemplateFile"` // Template for BGP peer configuration files
 	BGPPeerConfTemplate     *template.Template `json:"-"`
+	IPCommandPath           string             `json:"ipCommandPath"`
 }
 
 type wireGuardConfig struct {
-	WgConfDir                      string `json:"wgConfDir"`         // Directory for WireGuard configuration files
+	WGCommandPath                  string `json:"wgCommandPath"`     // Path to the WireGuard command
 	IPv4                           string `json:"ipv4"`              // IPv4 address for WireGuard interface
 	IPv6                           string `json:"ipv6"`              // IPv6 address for WireGuard interface
 	IPv6LinkLocal                  string `json:"ipv6LinkLocal"`     // IPv6 link-local address for WireGuard interface

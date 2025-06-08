@@ -74,9 +74,17 @@ func sendMetricsToPeerAPI(metrics map[string]SessionMetric) {
 	agent.SetUserAgent(SERVER_SIGNATURE)
 	agent.SetHeader("Authorization", "Bearer\x20"+token)
 
+	// Convert metrics map to array
+	sessionMutex.RLock()
+	metricsArray := make([]SessionMetric, 0, len(metrics))
+	for _, metric := range metrics {
+		metricsArray = append(metricsArray, metric)
+	}
+	sessionMutex.RUnlock()
+
 	resp, err := agent.Post(url, client.Config{
 		Body: map[string]any{
-			"metrics": metrics,
+			"metrics": metricsArray,
 		},
 	})
 	if err != nil {

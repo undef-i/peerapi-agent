@@ -10,7 +10,7 @@ import (
 
 func initRouter(app *fiber.App) {
 	app.Use(Protected())
-	app.Get("/", status)
+	app.Get("/status", status)
 	app.Get("/sync", manualSync)
 	app.Post("/info", nodePassthroughInfo)
 }

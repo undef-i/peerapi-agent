@@ -196,8 +196,11 @@ func (bp *BirdPool) WithConnection(fn func(conn *BirdConn) error) error {
 	if err != nil {
 		// Try to reconnect on error
 		if newConn, reconnErr := bp.createConnection(); reconnErr == nil {
+			bp.Lock()
 			pc.conn.Close()
 			pc.conn = newConn
+			bp.Unlock()
+
 			// Retry the operation once
 			err = fn(pc.conn)
 		}

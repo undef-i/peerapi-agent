@@ -15,7 +15,7 @@ type AgentApiResponse struct {
 type PeerApiResponse struct {
 	Code    int             `json:"code"`
 	Message string          `json:"message"`
-	Data    json.RawMessage `json:"data"` // Defer parsing of `data`
+	Data    json.RawMessage `json:"data"`
 }
 
 type NodePassthroughRequest struct {
@@ -28,20 +28,20 @@ type NodePassthroughRequest struct {
 
 // Agent API Session types
 type BgpSession struct {
-	UUID          string   `json:"uuid"`
-	ASN           uint     `json:"asn"`
-	Status        int      `json:"status"`
-	IPv4          string   `json:"ipv4"`
-	IPv6          string   `json:"ipv6"`
-	IPv6LinkLocal string   `json:"ipv6LinkLocal"`
-	Type          string   `json:"type"`
-	Extensions    []string `json:"extensions"`
-	Interface     string   `json:"interface"`
-	Endpoint      string   `json:"endpoint"`
-	Credential    string   `json:"credential"`
-	Data          string   `json:"data"`
-	MTU           int      `json:"mtu"`
-	Policy        int      `json:"policy"`
+	UUID          string          `json:"uuid"`
+	ASN           uint            `json:"asn"`
+	Status        int             `json:"status"`
+	IPv4          string          `json:"ipv4"`
+	IPv6          string          `json:"ipv6"`
+	IPv6LinkLocal string          `json:"ipv6LinkLocal"`
+	Type          string          `json:"type"`
+	Extensions    []string        `json:"extensions"`
+	Interface     string          `json:"interface"`
+	Endpoint      string          `json:"endpoint"`
+	Credential    string          `json:"credential"`
+	Data          json.RawMessage `json:"data"`
+	MTU           int             `json:"mtu"`
+	Policy        int             `json:"policy"`
 }
 
 type BgpSessionsResponse struct {

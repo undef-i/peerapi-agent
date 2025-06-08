@@ -172,7 +172,6 @@ Configuration is stored in a JSON file. Below is an example with explanations:
     },
 
     "wireguard": {
-        "wgConfDir": "/etc/wireguard",
         "ipv4": "172.23.91.132",
         "ipv6": "fd42:4242:2189:118::1",
         "ipv6LinkLocal": "fe80::118",
@@ -251,7 +250,6 @@ Configuration is stored in a JSON file. Below is an example with explanations:
 
 | Parameter | Description |
 |-----------|-------------|
-| `wgConfDir` | Directory for WireGuard configuration files |
 | `ipv4` | IPv4 address for WireGuard interfaces |
 | `ipv6` | IPv6 address for WireGuard interfaces |
 | `ipv6LinkLocal` | IPv6 link-local address |
