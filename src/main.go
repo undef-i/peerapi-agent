@@ -101,6 +101,7 @@ func main() {
 	go mainSessionTask()
 	go metricTask()
 	go bandwidthMonitorTask()
+	go dn42BGPCommunityTask()
 	go geoCheckTask()
 
 	log.Fatal(app.Listen(cfg.Server.Listen))
