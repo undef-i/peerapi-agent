@@ -149,6 +149,12 @@ func processNewSession(session *BgpSession, nextLocal map[string]BgpSession) {
 			return
 		}
 		log.Printf("[SyncSessions] Session %s has been configured", session.UUID)
+	case PEERING_STATUS_QUEUED_FOR_DELETE:
+		err := reportNewStatusToCenter(session.UUID, PEERING_STATUS_DELETED)
+		if err == nil {
+			session.Status = PEERING_STATUS_DELETED
+			log.Printf("[SyncSessions] Session %s is not locally synced but queued for deletion in PeerAPI DB, notifying and skipping", session.UUID)
+		}
 	default:
 		log.Printf("[SyncSessions] Skipping and adding session %s with status %d", session.UUID, session.Status)
 	}

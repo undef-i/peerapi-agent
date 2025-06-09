@@ -53,7 +53,7 @@ func nodePassthroughInfo(c fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).JSON(AgentApiResponse{
 			Code:    fiber.StatusBadRequest,
 			Message: "Invalid request format",
-			Data:    nil,
+			Data:    err,
 		})
 	}
 
