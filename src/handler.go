@@ -152,10 +152,7 @@ func getGREPassthroughInfo(c fiber.Ctx, req *NodePassthroughRequest, isIPv6 bool
 		tunnelType = "GRE over IPv4(gre)"
 	}
 
-	// Format IPv6 addresses with brackets if needed
-	if strings.Contains(endpoint, ":") {
-		endpoint = fmt.Sprintf("[%s]", endpoint)
-	}
+	endpoint = strings.TrimSpace(endpoint)
 
 	// Create response with endpoint info
 	response := map[string]string{
