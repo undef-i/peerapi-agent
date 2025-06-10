@@ -303,7 +303,7 @@ func deleteInterface(iface string) error {
 		// Continue anyway to try deletion
 	}
 
-	if !exist {
+	if err == nil && !exist {
 		log.Printf("Interface %s does not exist, no need to delete", iface)
 		return nil
 	}

@@ -134,12 +134,12 @@ func processNewSession(session *BgpSession, nextLocal map[string]BgpSession) {
 			log.Printf("[SyncSessions] Failed to configure session %s: %v", session.UUID, err)
 			return
 		}
+		session.Status = PEERING_STATUS_ENABLED
 		err = reportNewStatusToCenter(session.UUID, PEERING_STATUS_ENABLED)
 		if err != nil {
 			log.Printf("[SyncSessions] Session %s has been set up but status update failed: %v",
 				session.UUID, err)
 		} else {
-			session.Status = PEERING_STATUS_ENABLED
 			log.Printf("[SyncSessions] Session %s has been set up and enabled", session.UUID)
 		}
 	case PEERING_STATUS_ENABLED, PEERING_STATUS_PROBLEM:
@@ -178,12 +178,12 @@ func processChangedSession(newSession *BgpSession, oldSession *BgpSession, nextL
 
 	case PEERING_STATUS_QUEUED_FOR_DELETE:
 		deleteSession(oldSession)
+		newSession.Status = PEERING_STATUS_DELETED
 		err := reportNewStatusToCenter(newSession.UUID, PEERING_STATUS_DELETED)
 		if err != nil {
 			log.Printf("[SyncSessions] Session %s has been deleted but status update failed: %v",
 				newSession.UUID, err)
 		} else {
-			newSession.Status = PEERING_STATUS_DELETED
 			log.Printf("[SyncSessions] Session %s has been deleted and status updated", newSession.UUID)
 		}
 
@@ -193,12 +193,12 @@ func processChangedSession(newSession *BgpSession, oldSession *BgpSession, nextL
 			log.Printf("[SyncSessions] Failed to reconfigure session %s: %v", newSession.UUID, err)
 			return
 		}
+		newSession.Status = PEERING_STATUS_ENABLED
 		err = reportNewStatusToCenter(newSession.UUID, PEERING_STATUS_ENABLED)
 		if err != nil {
 			log.Printf("[SyncSessions] Session %s has been reconfigured but status update failed: %v",
 				newSession.UUID, err)
 		} else {
-			newSession.Status = PEERING_STATUS_ENABLED
 			log.Printf("[SyncSessions] Session %s has been reconfigured and enabled", newSession.UUID)
 		}
 
