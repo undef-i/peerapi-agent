@@ -111,7 +111,7 @@ func getWireGuardPassthroughInfo(c fiber.Ctx, req *NodePassthroughRequest) error
 			"**Endpoint**: ```%s:%d```\n\n**WireGuard** Public Key: ```%s```",
 			endpoint,
 			port,
-			cfg.WireGuard.PublicKey,
+			strings.TrimSpace(cfg.WireGuard.PublicKey),
 		),
 	}
 

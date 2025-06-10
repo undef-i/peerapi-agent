@@ -164,8 +164,8 @@ func collectTraditionalBGPMetrics(sessionName string, ipv4Import, ipv4Export, ip
 
 	// Create two BGP metrics, one for IPv4 and one for IPv6
 	*bgpMetrics = []BGPMetric{
-		createBGPMetric(sessionName, stateV4, infoV4, int(ipv4ImportV4), int(ipv4ExportV4), 0, 0),
-		createBGPMetric(sessionName, stateV6, infoV6, 0, 0, int(ipv6ImportV6), int(ipv6ExportV6)),
+		createBGPMetric(sessionName+"_v4", stateV4, infoV4, int(ipv4ImportV4), int(ipv4ExportV4), 0, 0),
+		createBGPMetric(sessionName+"_v6", stateV6, infoV6, 0, 0, int(ipv6ImportV6), int(ipv6ExportV6)),
 	}
 
 	// Set variables for history tracking

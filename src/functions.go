@@ -11,6 +11,8 @@ import (
 	"sync"
 	"time"
 
+	"slices"
+
 	"github.com/matishsiao/goInfo"
 	"github.com/oschwald/geoip2-golang"
 )
@@ -296,29 +298,30 @@ func getInterfaceFlags(name string) (string, error) {
 			result = append(result, name)
 		}
 	}
+	slices.Sort(result)
 	return strings.Join(result, ",\x20"), nil
 }
 
 var interfaceFlagMap = map[uint64]string{
 	0x1:     "UP",
-	0x2:     "BROADCAST",
-	0x4:     "DEBUG",
-	0x8:     "LOOPBACK",
-	0x10:    "POINTOPOINT",
-	0x20:    "NOTRAILERS",
-	0x40:    "RUNNING",
-	0x80:    "NOARP",
-	0x100:   "PROMISC",
-	0x200:   "ALLMULTI",
-	0x400:   "MASTER",
-	0x800:   "SLAVE",
-	0x1000:  "MULTICAST",
-	0x2000:  "PORTSEL",
-	0x4000:  "AUTOMEDIA",
-	0x8000:  "DYNAMIC",
-	0x10000: "LOWER_UP",
-	0x20000: "DORMANT",
-	0x40000: "ECHO",
+	0x2:     "Broadcast",
+	0x4:     "Debug",
+	0x8:     "Loopback",
+	0x10:    "PointToPoint",
+	0x20:    "NoTrailers",
+	0x40:    "Running",
+	0x80:    "NoARP",
+	0x100:   "Promisc",
+	0x200:   "AllMulti",
+	0x400:   "Master",
+	0x800:   "Slave",
+	0x1000:  "Multicast",
+	0x2000:  "PortSel",
+	0x4000:  "AutoMedia",
+	0x8000:  "Dynamic",
+	0x10000: "LowerUp",
+	0x20000: "Dormant",
+	0x40000: "Echo",
 }
 
 func _getRandomUnusedPort(proto string) (int, error) {
