@@ -119,7 +119,7 @@ func collectSessionMetric(session BgpSession, timestamp int64, metrics map[strin
 	var bgpMetrics []BGPMetric
 
 	// Collect BGP metrics based on session type
-	collectBGPMetrics(sessionName, mpBGP, &ipv4Import, &ipv4Export, &ipv6Import, &ipv6Export, &bgpMetrics)
+	collectBGPMetrics(sessionName, session, mpBGP, &ipv4Import, &ipv4Export, &ipv6Import, &ipv6Export, &bgpMetrics)
 
 	// Get interface traffic statistics from /proc/net/dev
 	rx, tx, _ := getInterfaceTraffic([]string{session.Interface})
@@ -136,10 +136,10 @@ func collectSessionMetric(session BgpSession, timestamp int64, metrics map[strin
 }
 
 // collectBGPMetrics collects BGP-specific metrics based on the session type
-func collectBGPMetrics(sessionName string, mpBGP bool, ipv4Import, ipv4Export, ipv6Import, ipv6Export *int64, bgpMetrics *[]BGPMetric) {
+func collectBGPMetrics(sessionName string, session BgpSession, mpBGP bool, ipv4Import, ipv4Export, ipv6Import, ipv6Export *int64, bgpMetrics *[]BGPMetric) {
 	if !mpBGP {
 		// For traditional BGP, we have two sessions (_v4 and _v6)
-		collectTraditionalBGPMetrics(sessionName, ipv4Import, ipv4Export, ipv6Import, ipv6Export, bgpMetrics)
+		collectTraditionalBGPMetrics(sessionName, session, ipv4Import, ipv4Export, ipv6Import, ipv6Export, bgpMetrics)
 	} else {
 		// For MP-BGP, we have a single session with both IPv4 and IPv6
 		collectMPBGPMetrics(sessionName, ipv4Import, ipv4Export, ipv6Import, ipv6Export, bgpMetrics)
@@ -147,32 +147,50 @@ func collectBGPMetrics(sessionName string, mpBGP bool, ipv4Import, ipv4Export, i
 }
 
 // collectTraditionalBGPMetrics collects metrics for traditional BGP sessions (separate v4 and v6)
-func collectTraditionalBGPMetrics(sessionName string, ipv4Import, ipv4Export, ipv6Import, ipv6Export *int64, bgpMetrics *[]BGPMetric) {
-	// Collect IPv4 metrics
-	stateV4, _, infoV4, ipv4ImportV4, ipv4ExportV4, _, _, errV4 := birdPool.ShowProtocolRoutes(sessionName + "_v4")
-	if errV4 != nil {
-		log.Printf("[Metrics] Failed to get protocol routes for %s_v4: %v\n", sessionName, errV4)
-		// Continue with empty values for v4
+func collectTraditionalBGPMetrics(sessionName string, session BgpSession, ipv4Import, ipv4Export, ipv6Import, ipv6Export *int64, bgpMetrics *[]BGPMetric) {
+	// Initialize the metrics array
+	*bgpMetrics = make([]BGPMetric, 0, 2)
+
+	if session.IPv6LinkLocal != "" || session.IPv6 != "" {
+		// Collect IPv6 metrics
+		stateV6, _, infoV6, _, _, ipv6ImportVal, ipv6ExportVal, errV6 := birdPool.ShowProtocolRoutes(sessionName + "_v6")
+		if errV6 != nil {
+			log.Printf("[Metrics] Failed to get protocol routes for %s_v6: %v\n", sessionName, errV6)
+			// Continue with empty values for v6
+		}
+
+		// Add IPv6 metric to the array
+		*bgpMetrics = append(*bgpMetrics, createBGPMetric(sessionName+"_v6", stateV6, infoV6, 0, 0, int(ipv6ImportVal), int(ipv6ExportVal)))
+
+		// Set variables for history tracking
+		*ipv6Import = ipv6ImportVal
+		*ipv6Export = ipv6ExportVal
+
+		if session.IPv4 == "" {
+			*ipv4Import = 0
+			*ipv4Export = 0
+		}
 	}
 
-	// Collect IPv6 metrics
-	stateV6, _, infoV6, _, _, ipv6ImportV6, ipv6ExportV6, errV6 := birdPool.ShowProtocolRoutes(sessionName + "_v6")
-	if errV6 != nil {
-		log.Printf("[Metrics] Failed to get protocol routes for %s_v6: %v\n", sessionName, errV6)
-		// Continue with empty values for v6
-	}
+	if session.IPv4 != "" {
+		// Collect IPv4 metrics
+		stateV4, _, infoV4, ipv4ImportVal, ipv4ExportVal, _, _, errV4 := birdPool.ShowProtocolRoutes(sessionName + "_v4")
+		if errV4 != nil {
+			log.Printf("[Metrics] Failed to get protocol routes for %s_v4: %v\n", sessionName, errV4)
+			// Continue with empty values for v4
+		}
 
-	// Create two BGP metrics, one for IPv4 and one for IPv6
-	*bgpMetrics = []BGPMetric{
-		createBGPMetric(sessionName+"_v4", stateV4, infoV4, int(ipv4ImportV4), int(ipv4ExportV4), 0, 0),
-		createBGPMetric(sessionName+"_v6", stateV6, infoV6, 0, 0, int(ipv6ImportV6), int(ipv6ExportV6)),
-	}
+		// Add IPv4 metric to the array
+		*bgpMetrics = append(*bgpMetrics, createBGPMetric(sessionName+"_v4", stateV4, infoV4, int(ipv4ImportVal), int(ipv4ExportVal), 0, 0))
 
-	// Set variables for history tracking
-	*ipv4Import = ipv4ImportV4
-	*ipv4Export = ipv4ExportV4
-	*ipv6Import = ipv6ImportV6
-	*ipv6Export = ipv6ExportV6
+		// Set variables for history tracking
+		*ipv4Import = ipv4ImportVal
+		*ipv4Export = ipv4ExportVal
+		if session.IPv6LinkLocal == "" && session.IPv6 == "" {
+			*ipv6Import = 0
+			*ipv6Export = 0
+		}
+	}
 }
 
 // collectMPBGPMetrics collects metrics for MP-BGP sessions (combined v4 and v6)
