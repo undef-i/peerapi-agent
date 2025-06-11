@@ -624,6 +624,7 @@ func updateRTTTracker(sessionUUID, preferredProtocol string, rtt int) {
 	if !exists {
 		tracker = &RTTTracker{}
 		rttTrackers[sessionUUID] = tracker
+		tracker.LastRTT = -1 // Initialize with -1
 	}
 
 	if preferredProtocol != "" {
