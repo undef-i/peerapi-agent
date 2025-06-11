@@ -65,11 +65,6 @@ func main() {
 		return
 	}
 
-	if cfg.PeerAPI.MetricInterval < 60 {
-		log.Fatalf("Invalid configuration: MetricInterval must be at least 60 seconds, got %d", cfg.PeerAPI.MetricInterval)
-		return
-	}
-
 	// Create a root context for graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -78,6 +73,11 @@ func main() {
 	cfg, err = loadConfig(*configFile)
 	if err != nil {
 		log.Fatalf("Failed to load config: %v\n", err)
+	}
+
+	if cfg.PeerAPI.MetricInterval < 60 {
+		log.Fatalf("Invalid configuration: MetricInterval must be at least 60 seconds, got %d", cfg.PeerAPI.MetricInterval)
+		return
 	}
 
 	// Initialize the custom logger
