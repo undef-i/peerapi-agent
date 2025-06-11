@@ -190,7 +190,7 @@ func collectTraditionalBGPMetrics(sessionName string, session BgpSession, ipv4Im
 		}
 
 		// Add IPv6 metric to the array
-		*bgpMetrics = append(*bgpMetrics, createBGPMetric(sessionName+"_v6", stateV6, infoV6, 0, 0, int(ipv6ImportVal), int(ipv6ExportVal)))
+		*bgpMetrics = append(*bgpMetrics, createBGPMetric(sessionName+"_v6", stateV6, infoV6, BGP_SESSION_TYPE_IPV6, 0, 0, int(ipv6ImportVal), int(ipv6ExportVal)))
 
 		// Set variables for history tracking
 		*ipv6Import = ipv6ImportVal
@@ -211,7 +211,7 @@ func collectTraditionalBGPMetrics(sessionName string, session BgpSession, ipv4Im
 		}
 
 		// Add IPv4 metric to the array
-		*bgpMetrics = append(*bgpMetrics, createBGPMetric(sessionName+"_v4", stateV4, infoV4, int(ipv4ImportVal), int(ipv4ExportVal), 0, 0))
+		*bgpMetrics = append(*bgpMetrics, createBGPMetric(sessionName+"_v4", stateV4, infoV4, BGP_SESSION_TYPE_IPV4, int(ipv4ImportVal), int(ipv4ExportVal), 0, 0))
 
 		// Set variables for history tracking
 		*ipv4Import = ipv4ImportVal
@@ -234,7 +234,7 @@ func collectMPBGPMetrics(sessionName string, ipv4Import, ipv4Export, ipv6Import,
 
 	// For MP-BGP, we only need one BGP metric
 	*bgpMetrics = []BGPMetric{
-		createBGPMetric(sessionName, state, info, int(ipv4ImportVal), int(ipv4ExportVal), int(ipv6ImportVal), int(ipv6ExportVal)),
+		createBGPMetric(sessionName, state, info, BGP_SESSION_TYPE_MPBGP, int(ipv4ImportVal), int(ipv4ExportVal), int(ipv6ImportVal), int(ipv6ExportVal)),
 	}
 
 	// Set variables for history tracking
@@ -245,11 +245,12 @@ func collectMPBGPMetrics(sessionName string, ipv4Import, ipv4Export, ipv6Import,
 }
 
 // createBGPMetric creates a BGP metric object with the given parameters
-func createBGPMetric(name, state, info string, ipv4Import, ipv4Export, ipv6Import, ipv6Export int) BGPMetric {
+func createBGPMetric(name, state, info, sessionType string, ipv4Import, ipv4Export, ipv6Import, ipv6Export int) BGPMetric {
 	return BGPMetric{
 		Name:  name,
 		State: state,
 		Info:  info,
+		Type:  sessionType,
 		Routes: BGPRoutesMetric{
 			IPv4: RouteMetricStruct{
 				Imported: RouteMetrics{
@@ -342,7 +343,6 @@ func updateMetricsWithHistory(session BgpSession, timestamp int64, metric *Sessi
 
 		// Update RTT metrics
 		updateRTTMetrics(metric, oldMetric, session, timestamp)
-
 		// Update route metrics
 		if mpBGP {
 			updateMPBGPRouteMetrics(metric, oldMetric, timestamp, ipv4Import, ipv4Export, ipv6Import, ipv6Export)
@@ -444,35 +444,59 @@ func updateMPBGPRouteMetrics(metric *SessionMetric, oldMetric SessionMetric, tim
 func updateTraditionalBGPRouteMetrics(metric *SessionMetric, oldMetric SessionMetric, timestamp int64,
 	ipv4Import, ipv4Export, ipv6Import, ipv6Export int64) {
 
-	// Update IPv4 metrics (first session)
-	if len(oldMetric.BGP) > 0 && len(metric.BGP) > 0 {
+	// Find IPv4 and IPv6 metrics by type instead of relying on index
+	var oldIPv4Metric, oldIPv6Metric *BGPMetric
+	var newIPv4Metric, newIPv6Metric *BGPMetric
+
+	// Find old metrics by type
+	for i := range oldMetric.BGP {
+		switch oldMetric.BGP[i].Type {
+		case BGP_SESSION_TYPE_IPV4:
+			oldIPv4Metric = &oldMetric.BGP[i]
+		case BGP_SESSION_TYPE_IPV6:
+			oldIPv6Metric = &oldMetric.BGP[i]
+		}
+	}
+
+	// Find new metrics by type
+	for i := range metric.BGP {
+		switch metric.BGP[i].Type {
+		case BGP_SESSION_TYPE_IPV4:
+			newIPv4Metric = &metric.BGP[i]
+		case BGP_SESSION_TYPE_IPV6:
+			newIPv6Metric = &metric.BGP[i]
+		}
+	}
+
+	// Update IPv4 metrics if both old and new exist
+	if oldIPv4Metric != nil && newIPv4Metric != nil {
 		updateRouteMetricsArray(
-			&metric.BGP[0].Routes.IPv4.Imported.Metric,
-			oldMetric.BGP[0].Routes.IPv4.Imported.Metric,
+			&newIPv4Metric.Routes.IPv4.Imported.Metric,
+			oldIPv4Metric.Routes.IPv4.Imported.Metric,
 			timestamp,
 			ipv4Import,
 		)
 
 		updateRouteMetricsArray(
-			&metric.BGP[0].Routes.IPv4.Exported.Metric,
-			oldMetric.BGP[0].Routes.IPv4.Exported.Metric,
+			&newIPv4Metric.Routes.IPv4.Exported.Metric,
+			oldIPv4Metric.Routes.IPv4.Exported.Metric,
 			timestamp,
 			ipv4Export,
 		)
 	}
 
-	// Update IPv6 metrics (second session)
-	if len(oldMetric.BGP) > 1 && len(metric.BGP) > 1 {
+	// Update IPv6 metrics if both old and new exist
+	if oldIPv6Metric != nil && newIPv6Metric != nil {
 		updateRouteMetricsArray(
-			&metric.BGP[1].Routes.IPv6.Imported.Metric,
-			oldMetric.BGP[1].Routes.IPv6.Imported.Metric,
+			&newIPv6Metric.Routes.IPv6.Imported.Metric,
+			oldIPv6Metric.Routes.IPv6.Imported.Metric,
 			timestamp,
 			ipv6Import,
 		)
 
 		updateRouteMetricsArray(
-			&metric.BGP[1].Routes.IPv6.Exported.Metric,
-			oldMetric.BGP[1].Routes.IPv6.Exported.Metric,
+			&newIPv6Metric.Routes.IPv6.Exported.Metric,
+			oldIPv6Metric.Routes.IPv6.Exported.Metric,
 			timestamp,
 			ipv6Export,
 		)
@@ -503,7 +527,6 @@ func initializeFirstTimeMetrics(metric *SessionMetric, timestamp int64,
 	rttValue := -1
 	metric.RTT.Current = rttValue
 	metric.RTT.Metric = [][2]int{{int(timestamp), rttValue}}
-
 	// Initialize route metrics
 	if mpBGP {
 		// For MP-BGP (single session)
@@ -514,17 +537,18 @@ func initializeFirstTimeMetrics(metric *SessionMetric, timestamp int64,
 			metric.BGP[0].Routes.IPv6.Exported.Metric = [][2]int64{{timestamp, int64(ipv6Export)}}
 		}
 	} else {
-		// For traditional BGP (two sessions)
-		if len(metric.BGP) > 0 {
-			// Initialize IPv4 metrics (first session)
-			metric.BGP[0].Routes.IPv4.Imported.Metric = [][2]int64{{timestamp, int64(ipv4Import)}}
-			metric.BGP[0].Routes.IPv4.Exported.Metric = [][2]int64{{timestamp, int64(ipv4Export)}}
-		}
-
-		if len(metric.BGP) > 1 {
-			// Initialize IPv6 metrics (second session)
-			metric.BGP[1].Routes.IPv6.Imported.Metric = [][2]int64{{timestamp, int64(ipv6Import)}}
-			metric.BGP[1].Routes.IPv6.Exported.Metric = [][2]int64{{timestamp, int64(ipv6Export)}}
+		// For traditional BGP - find metrics by type instead of using indices
+		for i := range metric.BGP {
+			switch metric.BGP[i].Type {
+			case BGP_SESSION_TYPE_IPV4:
+				// Initialize IPv4 metrics
+				metric.BGP[i].Routes.IPv4.Imported.Metric = [][2]int64{{timestamp, int64(ipv4Import)}}
+				metric.BGP[i].Routes.IPv4.Exported.Metric = [][2]int64{{timestamp, int64(ipv4Export)}}
+			case BGP_SESSION_TYPE_IPV6:
+				// Initialize IPv6 metrics
+				metric.BGP[i].Routes.IPv6.Imported.Metric = [][2]int64{{timestamp, int64(ipv6Import)}}
+				metric.BGP[i].Routes.IPv6.Exported.Metric = [][2]int64{{timestamp, int64(ipv6Export)}}
+			}
 		}
 	}
 }

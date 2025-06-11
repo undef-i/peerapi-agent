@@ -66,10 +66,17 @@ type SessionMetric struct {
 	RTT       RTT             `json:"rtt"`
 }
 
+const (
+	BGP_SESSION_TYPE_IPV4  = "ipv4"
+	BGP_SESSION_TYPE_IPV6  = "ipv6"
+	BGP_SESSION_TYPE_MPBGP = "mpbgp"
+)
+
 type BGPMetric struct {
 	Name   string          `json:"name"`
 	State  string          `json:"state"`
-	Info   string          `json:"info"`
+	Info   string          `json:"info"` // BGP_SESSION_TYPE_IPV4, BGP_SESSION_TYPE_IPV6, or BGP_SESSION_TYPE_MPBGP
+	Type   string          `json:"type"`
 	Routes BGPRoutesMetric `json:"routes"`
 }
 
