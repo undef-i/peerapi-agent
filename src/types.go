@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"time"
 )
 
 // Response formats
@@ -112,7 +111,6 @@ type RTT struct {
 
 // RTTTracker holds information about the best protocol to use for RTT measurements
 type RTTTracker struct {
-	PreferredProtocol string    // "ipv4", "ipv6", or "ipv6ll"
-	LastSuccessTime   time.Time // When we last got a successful ping
-	LastRTT           int       // Last measured RTT value
+	PreferredProtocol string // "ipv4", "ipv6", or "ipv6ll"
+	LastRTT           int    // Last measured RTT value
 }

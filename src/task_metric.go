@@ -8,18 +8,25 @@ import (
 	"maps"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gofiber/fiber/v3/client"
 )
 
 const (
-	// MAX_METRICS_HISTORY defines how many historical metric points to store
-	MAX_METRICS_HISTORY = 100
+	MAX_METRICS_HISTORY = 100 // MAX_METRICS_HISTORY defines how many historical metric points to store
+	PING_WORKER_COUNT   = 64  // Number of workers for parallel pinging, don't create too many or we might overwhelm the system
 )
+
+// Flag to prevent multiple concurrent batchMeasureRTT operations
+var batchRTTRunning int32 // Use atomic operations for this flag
 
 // collectMetrics collects metrics for all sessions or a specific session
 func collectMetrics(session ...BgpSession) {
+	// Background RTT measurement Task in parallel for better performance (asynchronous)
+	go batchMeasureRTT()
+
 	now := time.Now().UnixMilli()
 	newSessionMetrics := make(map[string]SessionMetric)
 
@@ -34,8 +41,6 @@ func collectMetrics(session ...BgpSession) {
 		return
 	}
 
-	// Pre-process RTT measurements in parallel for better performance
-	batchMeasureRTT()
 	// Otherwise collect metrics for all active sessions
 	sessionMutex.RLock()
 	for _, s := range localSessions {
@@ -51,6 +56,7 @@ func collectMetrics(session ...BgpSession) {
 		log.Println("[Metrics] No active sessions to collect metrics from.")
 		return
 	}
+
 	// Update the local metric map with the latest metrics
 	metricMutex.Lock()
 	maps.Copy(localMetrics, newSessionMetrics)
@@ -62,6 +68,12 @@ func collectMetrics(session ...BgpSession) {
 
 // sendMetricsToPeerAPI sends collected metrics to the PeerAPI server
 func sendMetricsToPeerAPI(metrics map[string]SessionMetric) {
+	startTime := time.Now()
+
+	if len(metrics) == 0 {
+		return
+	}
+
 	url := fmt.Sprintf("%s/agent/%s/report", cfg.PeerAPI.URL, cfg.PeerAPI.RouterUUID)
 	token, err := generateToken()
 	if err != nil {
@@ -69,6 +81,7 @@ func sendMetricsToPeerAPI(metrics map[string]SessionMetric) {
 		return
 	}
 
+	// Create HTTP client with timeout and context
 	agent := client.New().SetTimeout(time.Duration(cfg.PeerAPI.RequestTimeout) * time.Second)
 	agent.SetUserAgent(SERVER_SIGNATURE)
 	agent.SetHeader("Authorization", "Bearer\x20"+token)
@@ -81,32 +94,49 @@ func sendMetricsToPeerAPI(metrics map[string]SessionMetric) {
 	}
 	sessionMutex.RUnlock()
 
+	// Log the metrics being sent for debugging
+	log.Printf("[Metrics] Sending %d session metrics to PeerAPI (%s)", len(metricsArray), url)
+
+	// Create request body
+	requestBody := map[string]any{
+		"metrics": metricsArray,
+	}
+
 	resp, err := agent.Post(url, client.Config{
-		Body: map[string]any{
-			"metrics": metricsArray,
-		},
+		Body: requestBody,
 	})
 	if err != nil {
-		log.Printf("[Metrics] Failed to send metrics: %v\n", err)
+		log.Printf("[Metrics] Failed to send metrics to %s: %v (took %v)", url, err, time.Since(startTime))
 		return
 	}
 	defer resp.Close()
 
+	// Check HTTP status code
 	if resp.StatusCode() != 200 {
-		log.Printf("[Metrics] Failed to send metrics, status code: %d\n", resp.StatusCode())
+		bodyText := string(resp.Body())
+		log.Printf("[Metrics] Failed to send metrics, status code: %d, response body: %s (took %v)",
+			resp.StatusCode(), bodyText, time.Since(startTime))
 		return
 	}
 
+	// Parse response
 	var response PeerApiResponse
 	if err := json.Unmarshal(resp.Body(), &response); err != nil {
-		log.Printf("[Metrics] Failed to parse response: %v\n", err)
+		log.Printf("[Metrics] Failed to parse response: %v, response body: %s (took %v)",
+			err, string(resp.Body()), time.Since(startTime))
 		return
 	}
 
+	// Check API response code
 	if response.Code != 0 {
-		log.Printf("[Metrics] PeerAPI returned error: %s\n", response.Message)
+		log.Printf("[Metrics] PeerAPI returned error: %s (code: %d, took %v)",
+			response.Message, response.Code, time.Since(startTime))
 		return
 	}
+
+	// Success - log completion
+	log.Printf("[Metrics] Successfully sent %d session metrics to PeerAPI (took %v)",
+		len(metricsArray), time.Since(startTime))
 }
 
 // collectSessionMetric collects metrics for a single BGP session
@@ -321,7 +351,7 @@ func updateMetricsWithHistory(session BgpSession, timestamp int64, metric *Sessi
 		}
 	} else {
 		// First time collection, initialize with single data points
-		initializeFirstTimeMetrics(metric, session, timestamp, ipv4Import, ipv4Export, ipv6Import, ipv6Export, mpBGP)
+		initializeFirstTimeMetrics(metric, timestamp, ipv4Import, ipv4Export, ipv6Import, ipv6Export, mpBGP)
 	}
 }
 
@@ -352,21 +382,13 @@ func updateRTTMetrics(metric *SessionMetric, oldMetric SessionMetric, session Bg
 	rttMutex.Lock()
 	tracker, exists := rttTrackers[session.UUID]
 
-	if exists && time.Since(tracker.LastSuccessTime) < 5*time.Minute {
+	if exists {
 		// Use the cached RTT value if recent enough
 		rttValue = tracker.LastRTT
-		rttMutex.Unlock()
 	} else {
-		rttMutex.Unlock() // Unlock before the potentially time-consuming ping operation
-
-		// Measure current RTT value using the optimized function
-		rttValue = measureRTT(
-			session.UUID,
-			session.IPv4,
-			session.IPv6,
-			fmt.Sprintf("%s%%%s", session.IPv6LinkLocal, session.Interface),
-		)
+		rttValue = -1 // Default to -1 if no tracker exists
 	}
+	rttMutex.Unlock()
 
 	rttMetric := oldMetric.RTT.Metric
 	rttMetric = append(rttMetric, [2]int{int(timestamp), rttValue})
@@ -467,7 +489,7 @@ func updateRouteMetricsArray(metricArray *[][2]int64, oldArray [][2]int64, times
 }
 
 // initializeFirstTimeMetrics initializes metrics for the first time collection
-func initializeFirstTimeMetrics(metric *SessionMetric, session BgpSession, timestamp int64,
+func initializeFirstTimeMetrics(metric *SessionMetric, timestamp int64,
 	ipv4Import, ipv4Export, ipv6Import, ipv6Export int64, mpBGP bool) {
 
 	// Initialize traffic metric with a single data point
@@ -476,13 +498,9 @@ func initializeFirstTimeMetrics(metric *SessionMetric, session BgpSession, times
 		metric.Interface.Traffic.Current[0],
 		metric.Interface.Traffic.Current[1],
 	}}
-	// Initialize RTT metric with a single data point
-	rttValue := measureRTT(
-		session.UUID,
-		session.IPv4,
-		session.IPv6,
-		fmt.Sprintf("%s%%%s", session.IPv6LinkLocal, session.Interface),
-	)
+
+	// Initialize RTT metric with a single data point(-1: timeout for initial)
+	rttValue := -1
 	metric.RTT.Current = rttValue
 	metric.RTT.Metric = [][2]int{{int(timestamp), rttValue}}
 
@@ -511,8 +529,7 @@ func initializeFirstTimeMetrics(metric *SessionMetric, session BgpSession, times
 	}
 }
 
-// measureRTT is an optimized version of measureRTT that tries to use the
-// most recently successful IP protocol first, before falling back to others
+// Tries to use the most recently successful IP protocol first, before falling back to others
 func measureRTT(sessionUUID, ipv4, ipv6, ipv6ll string) int {
 	// Check if we have a preferred protocol for this session
 	rttMutex.RLock()
@@ -586,8 +603,8 @@ func updateRTTTracker(sessionUUID, preferredProtocol string, rtt int) {
 	}
 
 	if preferredProtocol != "" {
+		// which means we have a successful ping
 		tracker.PreferredProtocol = preferredProtocol
-		tracker.LastSuccessTime = time.Now()
 		tracker.LastRTT = rtt
 	}
 }
@@ -599,14 +616,12 @@ func pingRTT(ip string) int {
 	lastKnownFailedIP, exists := failedPingCache[ip]
 	rttMutex.RUnlock()
 
-	// If this IP has failed recently, use a shorter timeout for the next attempt
+	// If this IP has failed recently, force using a shorter timeout for the next attempt
 	timeout := cfg.Metric.PingTimeout
 	pingCount := cfg.Metric.PingCount
 
 	if exists && time.Since(lastKnownFailedIP) < 10*time.Minute {
-		// Use a reduced timeout and fewer pings for recently failed destinations
-		timeout = 1   // Use a 1-second timeout instead
-		pingCount = 1 // Just do a single ping attempt
+		pingCount = 1 // Just do a single ping attempt for recently failed destinations
 	}
 
 	// Try port 179 (standard BGP port)
@@ -624,7 +639,7 @@ func pingRTT(ip string) int {
 	}
 	rttMutex.Unlock()
 
-	log.Printf("[Metrics] Ping RTT for %s: %d ms (timeout: %d s, count: %d)\n", ip, rtt, timeout, pingCount)
+	// log.Printf("[Metrics] Ping RTT for %s: %d ms (timeout: %d s, count: %d)\n", ip, rtt, timeout, pingCount)
 	return rtt
 }
 
@@ -634,6 +649,14 @@ var failedPingCache = make(map[string]time.Time)
 // batchMeasureRTT processes multiple RTT measurements in parallel
 // This function is meant to be called before the regular metric collection cycle
 func batchMeasureRTT() {
+	// Use atomic operations to prevent multiple concurrent batch operations
+	if !atomic.CompareAndSwapInt32(&batchRTTRunning, 0, 1) {
+		// Another batch operation is already running, skip this one
+		log.Println("[Metrics] Skipping batch RTT measurement - another operation is in progress, ping worker may not enough, current worker count:", PING_WORKER_COUNT)
+		return
+	}
+	defer atomic.StoreInt32(&batchRTTRunning, 0)
+
 	sessionMutex.RLock()
 	sessions := make([]BgpSession, 0, len(localSessions))
 	for _, session := range localSessions {
@@ -647,9 +670,11 @@ func batchMeasureRTT() {
 		return
 	}
 
+	log.Printf("[Metrics] Starting batch RTT measurement for %d sessions", len(sessions))
+	startTime := time.Now()
+
 	// Create a worker pool with a reasonable number of workers
-	// Don't create too many or we might overwhelm the system
-	workerCount := min(len(sessions), 5)
+	workerCount := min(len(sessions), PING_WORKER_COUNT)
 
 	// Create channels for work distribution
 	jobs := make(chan BgpSession, len(sessions))
@@ -670,26 +695,26 @@ func batchMeasureRTT() {
 	for range sessions {
 		<-results
 	}
+
+	duration := time.Since(startTime)
+	log.Printf("[Metrics] Completed batch RTT measurement for %d sessions in %v", len(sessions), duration)
 }
 
 // rttWorker is a worker goroutine that processes RTT measurements
 func rttWorker(jobs <-chan BgpSession, results chan<- struct{}) {
 	for session := range jobs {
-		// Skip measurement if we have a recent value (less than 5 minutes old)
-		rttMutex.RLock()
-		tracker, exists := rttTrackers[session.UUID]
-		skipMeasurement := exists && time.Since(tracker.LastSuccessTime) < 5*time.Minute
-		rttMutex.RUnlock()
-
-		if !skipMeasurement {
-			// Perform RTT measurement
-			measureRTT(
-				session.UUID,
-				session.IPv4,
-				session.IPv6,
-				fmt.Sprintf("%s%%%s", session.IPv6LinkLocal, session.Interface),
-			)
+		ipv6LinkLocal := session.IPv6LinkLocal
+		if ipv6LinkLocal != "" {
+			ipv6LinkLocal = fmt.Sprintf("%s%%%s", session.IPv6LinkLocal, session.Interface)
 		}
+
+		// Perform RTT measurement
+		measureRTT(
+			session.UUID,
+			session.IPv4,
+			session.IPv6,
+			ipv6LinkLocal,
+		)
 
 		// Signal that this job is done
 		results <- struct{}{}
@@ -753,9 +778,7 @@ func performRTTCacheCleanup() {
 
 	for uuid := range rttTrackers {
 		// Remove trackers for sessions that no longer exist
-		// or haven't had a successful measurement in 24 hours
-		if !activeUUIDs[uuid] ||
-			time.Since(rttTrackers[uuid].LastSuccessTime) > 24*time.Hour {
+		if !activeUUIDs[uuid] {
 			delete(rttTrackers, uuid)
 			trackersRemoved++
 		}

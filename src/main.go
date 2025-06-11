@@ -19,7 +19,7 @@ import (
 
 const (
 	SERVER_NAME    = "iEdon-PeerAPI-Agent"
-	SERVER_VERSION = "1.0"
+	SERVER_VERSION = "1.0.1"
 )
 
 var SERVER_SIGNATURE = fmt.Sprintf("%s (%s; %s; %s)", SERVER_NAME+"/"+SERVER_VERSION, runtime.GOOS, runtime.GOARCH, runtime.Version())
@@ -62,6 +62,11 @@ func main() {
 	if *help {
 		fmt.Fprintln(os.Stderr, "Usage:", os.Args[0], "[-c config_file]")
 		flag.PrintDefaults()
+		return
+	}
+
+	if cfg.PeerAPI.MetricInterval < 60 {
+		log.Fatalf("Invalid configuration: MetricInterval must be at least 60 seconds, got %d", cfg.PeerAPI.MetricInterval)
 		return
 	}
 

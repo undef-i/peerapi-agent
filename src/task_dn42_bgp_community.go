@@ -29,9 +29,16 @@ import (
 // getLatencyCommunityValue calculates the appropriate latency community value
 // based on the RTT in milliseconds
 func getLatencyCommunityValue(rtt int) int {
-	if rtt <= 0 {
+	if rtt == -1 {
 		// If ping failed or timed out, default to 0 (no community)
 		return 0
+	}
+
+	if rtt == 0 {
+		// If RTT is 0, it is likely directly connected or nearby network path,
+		// which is considered very low latency
+		// Treat as community value 1
+		return 1
 	}
 
 	// For values 1-9, we use the exponential formula

@@ -158,7 +158,7 @@ func getGREPassthroughInfo(c fiber.Ctx, req *NodePassthroughRequest, isIPv6 bool
 	response := map[string]string{
 		"passthrough": tokenString,
 		"info": fmt.Sprintf(
-			"- You can create only 1 session with the same endpoint\n- You must use IP instead of hostname for endpoint\n\n**Endpoint**: ```%s```\n\n**Tunnel Type**: ```%s```",
+			"- Keep in mind that GRE Tunnels are not safe, as traffic is not going to be encrypted\n- You can create only 1 session with the same endpoint\n- You must use IP instead of hostname for endpoint\n\n**Endpoint**: ```%s```\n\n**Tunnel Type**: ```%s```",
 			endpoint,
 			tunnelType,
 		),
