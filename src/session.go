@@ -267,7 +267,7 @@ func configureIPAddresses(ctx context.Context, session *BgpSession) error {
 			return fmt.Errorf("failed to add IPv4: %v (output: \"%s\")", ipv4Err, strings.TrimSpace(ipv4Output))
 		}
 	}
-	// Configure IPv6 Link-Local if provided, otherwise use global IPv6
+	// Configure IPv6 Link-Local if provided
 	if session.IPv6LinkLocal != "" {
 		cmd := exec.CommandContext(ctx, cfg.Bird.IPCommandPath, "addr", "add", "dev", session.Interface,
 			localIPv6LinkLocal+"/64", "peer", session.IPv6LinkLocal+"/64")
@@ -277,7 +277,9 @@ func configureIPAddresses(ctx context.Context, session *BgpSession) error {
 		if ipv6llErr != nil {
 			return fmt.Errorf("failed to add IPv6 link-local: %v (output: \"%s\")", ipv6llErr, strings.TrimSpace(ipv6llOutput))
 		}
-	} else if session.IPv6 != "" {
+	}
+	// Configure global IPv6 if provided
+	if session.IPv6 != "" {
 		cmd := exec.CommandContext(ctx, cfg.Bird.IPCommandPath, "addr", "add", "dev", session.Interface,
 			localIPv6+"/128", "peer", session.IPv6+"/128")
 		ipv6OutputBytes, ipv6Err := cmd.CombinedOutput()
