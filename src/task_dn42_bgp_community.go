@@ -100,6 +100,7 @@ func updateFilterParams() {
 		// Get the RTT value for this session
 		rtt, exists := rttValues[session.UUID]
 		if !exists {
+			rtt = -1 // Default to -1 if no RTT value exists
 			// If no RTT value exists, use the most recent measurement from the tracker
 			rttMutex.RLock()
 			tracker, trackerExists := rttTrackers[session.UUID]

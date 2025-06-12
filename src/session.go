@@ -146,7 +146,7 @@ func configureWireguardInterface(ctx context.Context, session *BgpSession) error
 		return fmt.Errorf("failed to configure wireguard: %v (output: \"%s\")", err, strings.TrimSpace(output))
 	}
 
-	// Configure IP addresses
+	// Configure IP addresses(also see bringUpInterface)
 	if err := configureIPAddresses(ctx, session); err != nil {
 		return err
 	}
@@ -161,9 +161,8 @@ func configureWireguardInterface(ctx context.Context, session *BgpSession) error
 	}
 
 	// Bring up interface
-	cmd = exec.CommandContext(ctx, cfg.Bird.IPCommandPath, "link", "set", "up", "dev", session.Interface)
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to bring up interface: %v", err)
+	if err := bringUpInterface(ctx, session); err != nil {
+		return fmt.Errorf("failed to bring up %s interface: %v", session.Type, err)
 	}
 
 	log.Printf("Successfully configured WireGuard interface %s for session %s",
@@ -209,7 +208,7 @@ func configureGreInterface(ctx context.Context, session *BgpSession) error {
 		return fmt.Errorf("failed to create %s tunnel: %v (output: \"%s\")", session.Type, err, strings.TrimSpace(output))
 	}
 
-	// Configure IP addresses
+	// Configure IP addresses(also see bringUpInterface)
 	if err := configureIPAddresses(ctx, session); err != nil {
 		return err
 	}
@@ -223,12 +222,8 @@ func configureGreInterface(ctx context.Context, session *BgpSession) error {
 	}
 
 	// Bring up interface
-	cmd = exec.CommandContext(ctx, cfg.Bird.IPCommandPath, "link", "set", "up", "dev", session.Interface)
-	upOutputBytes, upErr := cmd.CombinedOutput()
-	upOutput := string(upOutputBytes)
-
-	if upErr != nil {
-		return fmt.Errorf("failed to bring up GRE interface: %v (output: \"%s\")", upErr, strings.TrimSpace(upOutput))
+	if err := bringUpInterface(ctx, session); err != nil {
+		return fmt.Errorf("failed to bring up %s interface: %v", session.Type, err)
 	}
 
 	log.Printf("Successfully configured %s interface %s for session %s",
@@ -288,21 +283,47 @@ func configureIPAddresses(ctx context.Context, session *BgpSession) error {
 		if ipv6Err != nil {
 			return fmt.Errorf("failed to add IPv6: %v (output: \"%s\")", ipv6Err, strings.TrimSpace(ipv6Output))
 		}
-
-		// Linux will not automatically add route for IPv6 ula/gua though we have added peer address above,
-		cmd = exec.CommandContext(ctx, cfg.Bird.IPCommandPath, "-6", "route", "add", session.IPv6+"/128", "dev", session.Interface)
-		ipv6OutputBytes, ipv6Err = cmd.CombinedOutput()
-		ipv6Output = string(ipv6OutputBytes)
-
-		if ipv6Err != nil {
-			return fmt.Errorf("failed to add IPv6 route: %v (output: \"%s\")", ipv6Err, strings.TrimSpace(ipv6Output))
-		}
 	}
 
 	return nil
 }
 
-// deleteInterface removes a network interface
+func setIPv6InterfaceRoute(ctx context.Context, session *BgpSession) error {
+	// Must be called after the interface is up
+	cmd := exec.CommandContext(ctx, cfg.Bird.IPCommandPath, "-6", "route", "add", session.IPv6+"/128", "dev", session.Interface)
+	ipv6OutputBytes, ipv6Err := cmd.CombinedOutput()
+	ipv6Output := string(ipv6OutputBytes)
+
+	if ipv6Err != nil {
+		return fmt.Errorf("failed to add IPv6 route: %v (output: \"%s\")", ipv6Err, strings.TrimSpace(ipv6Output))
+	}
+
+	return nil
+}
+
+func bringUpInterface(ctx context.Context, session *BgpSession) error {
+	// Bring up the interface
+	cmd := exec.CommandContext(ctx, cfg.Bird.IPCommandPath, "link", "set", "up", "dev", session.Interface)
+	outputBytes, err := cmd.CombinedOutput()
+	output := string(outputBytes)
+
+	if err != nil {
+		return fmt.Errorf("failed to bring up interface %s: %v (output: \"%s\")", session.Interface, err, strings.TrimSpace(output))
+	}
+
+	// Set IPv6 route if applicable
+	// Linux will not automatically add route for IPv6 ula/gua though we have added peer address
+	// for IPv6 link-local, we do not have to do this
+	// for IPv4, system will automatically add route for /32 peer address
+	if session.IPv6 != "" {
+		if err := setIPv6InterfaceRoute(ctx, session); err != nil {
+			return fmt.Errorf("failed to set IPv6 dev route for interface: %v", err)
+		}
+	}
+	return nil
+}
+
+// deleteInterface removes a network interface, will automatically bring it down first if it exists
 func deleteInterface(iface string) error {
 	// Set a timeout for commands to prevent hanging
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
