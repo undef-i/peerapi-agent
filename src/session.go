@@ -288,6 +288,15 @@ func configureIPAddresses(ctx context.Context, session *BgpSession) error {
 		if ipv6Err != nil {
 			return fmt.Errorf("failed to add IPv6: %v (output: \"%s\")", ipv6Err, strings.TrimSpace(ipv6Output))
 		}
+
+		// Linux will not automatically add route for IPv6 ula/gua though we have added peer address above,
+		cmd = exec.CommandContext(ctx, cfg.Bird.IPCommandPath, "-6", "route", "add", session.IPv6+"/128", "dev", session.Interface)
+		ipv6OutputBytes, ipv6Err = cmd.CombinedOutput()
+		ipv6Output = string(ipv6OutputBytes)
+
+		if ipv6Err != nil {
+			return fmt.Errorf("failed to add IPv6 route: %v (output: \"%s\")", ipv6Err, strings.TrimSpace(ipv6Output))
+		}
 	}
 
 	return nil
