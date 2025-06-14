@@ -75,8 +75,8 @@ const (
 type BGPMetric struct {
 	Name   string          `json:"name"`
 	State  string          `json:"state"`
-	Info   string          `json:"info"` // BGP_SESSION_TYPE_IPV4, BGP_SESSION_TYPE_IPV6, or BGP_SESSION_TYPE_MPBGP
-	Type   string          `json:"type"`
+	Info   string          `json:"info"`
+	Type   string          `json:"type"` // BGP_SESSION_TYPE_IPV4, BGP_SESSION_TYPE_IPV6, or BGP_SESSION_TYPE_MPBGP
 	Routes BGPRoutesMetric `json:"routes"`
 }
 

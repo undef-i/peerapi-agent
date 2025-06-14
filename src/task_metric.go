@@ -8,52 +8,49 @@ import (
 	"maps"
 	"slices"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/gofiber/fiber/v3/client"
+	"github.com/iedon/peerapi-agent/bird"
 )
 
-const (
-	MAX_METRICS_HISTORY = 100 // MAX_METRICS_HISTORY defines how many historical metric points to store
-	PING_WORKER_COUNT   = 64  // Number of workers for parallel pinging, don't create too many or we might overwhelm the system
-)
+// MetricJob represents a single metric collection job
+type MetricJob struct {
+	Session   BgpSession
+	Timestamp int64
+}
 
-// Flag to prevent multiple concurrent batchMeasureRTT operations
-var batchRTTRunning int32 // Use atomic operations for this flag
+// MetricResult represents the result of metric collection for one session
+type MetricResult struct {
+	UUID   string
+	Metric SessionMetric
+	Error  error
+}
 
-// collectMetrics collects metrics for all sessions or a specific session
-func collectMetrics(session ...BgpSession) {
-	// Background RTT measurement Task in parallel for better performance (asynchronous)
-	go batchMeasureRTT()
+// collectMetrics collects metrics for all sessions or a specific session using optimized worker pools
+func collectMetrics() {
+	now := time.Now().Unix()
 
-	now := time.Now().UnixMilli()
-	newSessionMetrics := make(map[string]SessionMetric)
-
-	// If a specific session is provided, only collect metrics for that session
-	if len(session) > 0 {
-		s := session[0]
-		if s.Status != PEERING_STATUS_ENABLED && s.Status != PEERING_STATUS_PROBLEM {
-			return
-		}
-
-		collectSessionMetric(s, now, newSessionMetrics)
-		return
-	}
-
-	// Otherwise collect metrics for all active sessions
+	// Get active sessions first
 	sessionMutex.RLock()
+	activeSessions := make([]BgpSession, 0, len(localSessions))
 	for _, s := range localSessions {
-		if s.Status != PEERING_STATUS_ENABLED && s.Status != PEERING_STATUS_PROBLEM {
-			continue
+		if s.Status == PEERING_STATUS_ENABLED || s.Status == PEERING_STATUS_PROBLEM {
+			activeSessions = append(activeSessions, s)
 		}
-
-		collectSessionMetric(s, now, newSessionMetrics)
 	}
 	sessionMutex.RUnlock()
 
-	if len(newSessionMetrics) == 0 {
+	if len(activeSessions) == 0 {
 		log.Println("[Metrics] No active sessions to collect metrics from.")
+		return
+	}
+
+	// Use concurrent processing for metric collection
+	newSessionMetrics := batchCollectSessionMetrics(activeSessions, now)
+
+	if len(newSessionMetrics) == 0 {
+		log.Println("[Metrics] No metrics collected from active sessions.")
 		return
 	}
 
@@ -64,6 +61,185 @@ func collectMetrics(session ...BgpSession) {
 
 	// Send metrics to PeerAPI
 	sendMetricsToPeerAPI(newSessionMetrics)
+}
+
+// batchCollectSessionMetrics collects metrics for multiple sessions concurrently
+func batchCollectSessionMetrics(sessions []BgpSession, timestamp int64) map[string]SessionMetric {
+	if len(sessions) == 0 {
+		return make(map[string]SessionMetric)
+	}
+
+	startTime := time.Now()
+
+	// Pre-collect BIRD protocol data for all sessions in parallel
+	sessionNames := make([]string, 0, len(sessions)*2) // Estimate for traditional BGP
+	sessionNameMap := make(map[string]BgpSession)
+
+	for _, session := range sessions {
+		sessionName := fmt.Sprintf("DN42_%d_%s", session.ASN, session.Interface)
+		mpBGP := slices.Contains(session.Extensions, "mp-bgp")
+
+		if mpBGP {
+			// MP-BGP uses single session
+			sessionNames = append(sessionNames, sessionName)
+			sessionNameMap[sessionName] = session
+		} else {
+			// Traditional BGP uses separate v4 and v6 sessions
+			if session.IPv4 != "" {
+				v4Name := sessionName + "_v4"
+				sessionNames = append(sessionNames, v4Name)
+				sessionNameMap[v4Name] = session
+			}
+			if session.IPv6LinkLocal != "" || session.IPv6 != "" {
+				v6Name := sessionName + "_v6"
+				sessionNames = append(sessionNames, v6Name)
+				sessionNameMap[v6Name] = session
+			}
+		}
+	}
+
+	// Batch query BIRD for all protocol statuses concurrently
+	birdMetrics := birdPool.BatchGetProtocolStatus(sessionNames)
+
+	// Create worker pool for concurrent session processing
+	workerCount := min(len(sessions), cfg.Metric.SessionWorkerCount)
+	if workerCount == 0 {
+		workerCount = min(len(sessions), 8) // Default fallback
+	}
+
+	jobs := make(chan MetricJob, len(sessions))
+	results := make(chan MetricResult, len(sessions))
+
+	// Start worker goroutines
+	var wg sync.WaitGroup
+	for range workerCount {
+		wg.Add(1)
+		go metricWorker(jobs, results, birdMetrics, &wg)
+	}
+
+	// Send jobs to workers
+	for _, session := range sessions {
+		jobs <- MetricJob{
+			Session:   session,
+			Timestamp: timestamp,
+		}
+	}
+	close(jobs)
+
+	// Wait for all workers to finish
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	// Collect results
+	newSessionMetrics := make(map[string]SessionMetric, len(sessions))
+	for result := range results {
+		if result.Error != nil {
+			log.Printf("[Metrics] Failed to collect metrics for session %s: %v", result.UUID, result.Error)
+			continue
+		}
+		newSessionMetrics[result.UUID] = result.Metric
+	}
+
+	duration := time.Since(startTime)
+	log.Printf("[Metrics] Collected metrics for %d sessions using %d workers in %v",
+		len(newSessionMetrics), workerCount, duration)
+
+	return newSessionMetrics
+}
+
+// metricWorker processes metric collection jobs concurrently
+func metricWorker(jobs <-chan MetricJob, results chan<- MetricResult, birdMetrics map[string]bird.ProtocolMetrics, wg *sync.WaitGroup) {
+	defer wg.Done()
+
+	for job := range jobs {
+		result := MetricResult{
+			UUID: job.Session.UUID,
+		}
+
+		// Collect metrics for this session
+		metric, err := collectSessionMetric(job.Session, job.Timestamp, birdMetrics)
+		if err != nil {
+			result.Error = err
+		} else {
+			result.Metric = metric
+		}
+
+		results <- result
+	}
+}
+
+// collectSessionMetric collects metrics for a single session using pre-fetched BIRD data
+func collectSessionMetric(session BgpSession, timestamp int64, birdMetrics map[string]bird.ProtocolMetrics) (SessionMetric, error) {
+	sessionName := fmt.Sprintf("DN42_%d_%s", session.ASN, session.Interface)
+	mpBGP := slices.Contains(session.Extensions, "mp-bgp")
+
+	// Initialize variables for BGP metrics
+	var ipv4Import, ipv4Export, ipv6Import, ipv6Export int64
+	var bgpMetrics []BGPMetric
+
+	// Collect BGP metrics using pre-fetched data
+	if mpBGP {
+		// For MP-BGP, look up the single session
+		if metrics, exists := birdMetrics[sessionName]; exists {
+			bgpMetrics = []BGPMetric{
+				createBGPMetric(sessionName, metrics.State, metrics.Info, BGP_SESSION_TYPE_MPBGP,
+					int(metrics.IPv4Import), int(metrics.IPv4Export),
+					int(metrics.IPv6Import), int(metrics.IPv6Export)),
+			}
+			ipv4Import = metrics.IPv4Import
+			ipv4Export = metrics.IPv4Export
+			ipv6Import = metrics.IPv6Import
+			ipv6Export = metrics.IPv6Export
+		} else {
+			// Default empty metrics if BIRD data is missing
+			bgpMetrics = []BGPMetric{
+				createBGPMetric(sessionName, "Unknown", "No data", BGP_SESSION_TYPE_MPBGP, 0, 0, 0, 0),
+			}
+		}
+	} else {
+		// For traditional BGP, look up v4 and v6 sessions separately
+		bgpMetrics = make([]BGPMetric, 0, 2)
+
+		if session.IPv6LinkLocal != "" || session.IPv6 != "" {
+			v6Name := sessionName + "_v6"
+			if metrics, exists := birdMetrics[v6Name]; exists {
+				bgpMetrics = append(bgpMetrics, createBGPMetric(v6Name, metrics.State, metrics.Info, BGP_SESSION_TYPE_IPV6,
+					0, 0, int(metrics.IPv6Import), int(metrics.IPv6Export)))
+				ipv6Import = metrics.IPv6Import
+				ipv6Export = metrics.IPv6Export
+			} else {
+				bgpMetrics = append(bgpMetrics, createBGPMetric(v6Name, "Unknown", "No data", BGP_SESSION_TYPE_IPV6, 0, 0, 0, 0))
+			}
+		}
+
+		if session.IPv4 != "" {
+			v4Name := sessionName + "_v4"
+			if metrics, exists := birdMetrics[v4Name]; exists {
+				bgpMetrics = append(bgpMetrics, createBGPMetric(v4Name, metrics.State, metrics.Info, BGP_SESSION_TYPE_IPV4,
+					int(metrics.IPv4Import), int(metrics.IPv4Export), 0, 0))
+				ipv4Import = metrics.IPv4Import
+				ipv4Export = metrics.IPv4Export
+			} else {
+				bgpMetrics = append(bgpMetrics, createBGPMetric(v4Name, "Unknown", "No data", BGP_SESSION_TYPE_IPV4, 0, 0, 0, 0))
+			}
+		}
+	}
+
+	// Get interface traffic statistics from /proc/net/dev
+	rx, tx, _ := getInterfaceTraffic([]string{session.Interface})
+
+	// Get current traffic rates from localTrafficRate
+	rxRate, txRate := getTrafficRates(session.Interface)
+
+	// Initialize new metric
+	metric := initializeSessionMetric(session, timestamp, bgpMetrics, rx, tx, rxRate, txRate)
+
+	// Update metrics with historical data if available
+	updateMetricsWithHistory(session, timestamp, &metric, ipv4Import, ipv4Export, ipv6Import, ipv6Export, mpBGP)
+
+	return metric, nil
 }
 
 // sendMetricsToPeerAPI sends collected metrics to the PeerAPI server
@@ -95,7 +271,7 @@ func sendMetricsToPeerAPI(metrics map[string]SessionMetric) {
 	sessionMutex.RUnlock()
 
 	// Log the metrics being sent for debugging
-	log.Printf("[Metrics] Sending %d session metrics to PeerAPI (%s)", len(metricsArray), url)
+	log.Printf("[Metrics] Sending %d session metrics to PeerAPI...", len(metricsArray))
 
 	// Create request body
 	requestBody := map[string]any{
@@ -137,111 +313,6 @@ func sendMetricsToPeerAPI(metrics map[string]SessionMetric) {
 	// Success - log completion
 	log.Printf("[Metrics] Successfully sent %d session metrics to PeerAPI (took %v)",
 		len(metricsArray), time.Since(startTime))
-}
-
-// collectSessionMetric collects metrics for a single BGP session
-func collectSessionMetric(session BgpSession, timestamp int64, metrics map[string]SessionMetric) {
-	sessionName := fmt.Sprintf("DN42_%d_%s", session.ASN, session.Interface)
-	mpBGP := slices.Contains(session.Extensions, "mp-bgp")
-
-	// Initialize variables for BGP metrics
-	var ipv4Import, ipv4Export, ipv6Import, ipv6Export int64
-	var bgpMetrics []BGPMetric
-
-	// Collect BGP metrics based on session type
-	collectBGPMetrics(sessionName, session, mpBGP, &ipv4Import, &ipv4Export, &ipv6Import, &ipv6Export, &bgpMetrics)
-
-	// Get interface traffic statistics from /proc/net/dev
-	rx, tx, _ := getInterfaceTraffic([]string{session.Interface})
-
-	// Get current traffic rates from localTrafficRate
-	rxRate, txRate := getTrafficRates(session.Interface)
-
-	// Initialize new metric
-	metric := initializeSessionMetric(session, timestamp, bgpMetrics, rx, tx, rxRate, txRate)
-	// Update metrics with historical data if available
-	updateMetricsWithHistory(session, timestamp, &metric, ipv4Import, ipv4Export, ipv6Import, ipv6Export, mpBGP)
-
-	metrics[session.UUID] = metric
-}
-
-// collectBGPMetrics collects BGP-specific metrics based on the session type
-func collectBGPMetrics(sessionName string, session BgpSession, mpBGP bool, ipv4Import, ipv4Export, ipv6Import, ipv6Export *int64, bgpMetrics *[]BGPMetric) {
-	if !mpBGP {
-		// For traditional BGP, we have two sessions (_v4 and _v6)
-		collectTraditionalBGPMetrics(sessionName, session, ipv4Import, ipv4Export, ipv6Import, ipv6Export, bgpMetrics)
-	} else {
-		// For MP-BGP, we have a single session with both IPv4 and IPv6
-		collectMPBGPMetrics(sessionName, ipv4Import, ipv4Export, ipv6Import, ipv6Export, bgpMetrics)
-	}
-}
-
-// collectTraditionalBGPMetrics collects metrics for traditional BGP sessions (separate v4 and v6)
-func collectTraditionalBGPMetrics(sessionName string, session BgpSession, ipv4Import, ipv4Export, ipv6Import, ipv6Export *int64, bgpMetrics *[]BGPMetric) {
-	// Initialize the metrics array
-	*bgpMetrics = make([]BGPMetric, 0, 2)
-
-	if session.IPv6LinkLocal != "" || session.IPv6 != "" {
-		// Collect IPv6 metrics
-		stateV6, _, infoV6, _, _, ipv6ImportVal, ipv6ExportVal, errV6 := birdPool.ShowProtocolRoutes(sessionName + "_v6")
-		if errV6 != nil {
-			log.Printf("[Metrics] Failed to get protocol routes for %s_v6: %v\n", sessionName, errV6)
-			// Continue with empty values for v6
-		}
-
-		// Add IPv6 metric to the array
-		*bgpMetrics = append(*bgpMetrics, createBGPMetric(sessionName+"_v6", stateV6, infoV6, BGP_SESSION_TYPE_IPV6, 0, 0, int(ipv6ImportVal), int(ipv6ExportVal)))
-
-		// Set variables for history tracking
-		*ipv6Import = ipv6ImportVal
-		*ipv6Export = ipv6ExportVal
-
-		if session.IPv4 == "" {
-			*ipv4Import = 0
-			*ipv4Export = 0
-		}
-	}
-
-	if session.IPv4 != "" {
-		// Collect IPv4 metrics
-		stateV4, _, infoV4, ipv4ImportVal, ipv4ExportVal, _, _, errV4 := birdPool.ShowProtocolRoutes(sessionName + "_v4")
-		if errV4 != nil {
-			log.Printf("[Metrics] Failed to get protocol routes for %s_v4: %v\n", sessionName, errV4)
-			// Continue with empty values for v4
-		}
-
-		// Add IPv4 metric to the array
-		*bgpMetrics = append(*bgpMetrics, createBGPMetric(sessionName+"_v4", stateV4, infoV4, BGP_SESSION_TYPE_IPV4, int(ipv4ImportVal), int(ipv4ExportVal), 0, 0))
-
-		// Set variables for history tracking
-		*ipv4Import = ipv4ImportVal
-		*ipv4Export = ipv4ExportVal
-		if session.IPv6LinkLocal == "" && session.IPv6 == "" {
-			*ipv6Import = 0
-			*ipv6Export = 0
-		}
-	}
-}
-
-// collectMPBGPMetrics collects metrics for MP-BGP sessions (combined v4 and v6)
-func collectMPBGPMetrics(sessionName string, ipv4Import, ipv4Export, ipv6Import, ipv6Export *int64, bgpMetrics *[]BGPMetric) {
-	// For MP-BGP, we have a single session with both IPv4 and IPv6
-	state, _, info, ipv4ImportVal, ipv4ExportVal, ipv6ImportVal, ipv6ExportVal, err := birdPool.ShowProtocolRoutes(sessionName)
-	if err != nil {
-		log.Printf("[Metrics] Failed to get protocol routes for %s: %v\n", sessionName, err)
-		// Continue with empty values
-	}
-
-	// For MP-BGP, we only need one BGP metric
-	*bgpMetrics = []BGPMetric{
-		createBGPMetric(sessionName, state, info, BGP_SESSION_TYPE_MPBGP, int(ipv4ImportVal), int(ipv4ExportVal), int(ipv6ImportVal), int(ipv6ExportVal)),
-	}
-
-	// Set variables for history tracking
-	*ipv4Import = ipv4ImportVal
-	*ipv4Export = ipv4ExportVal
-	*ipv6Import = ipv6ImportVal
-	*ipv6Export = ipv6ExportVal
 }
 
 // createBGPMetric creates a BGP metric object with the given parameters
@@ -366,7 +437,7 @@ func updateTrafficMetrics(metric *SessionMetric, oldMetric SessionMetric, timest
 		metric.Interface.Traffic.Current[1],
 	})
 
-	if len(trafficMetric) > MAX_METRICS_HISTORY {
+	if len(trafficMetric) > cfg.Metric.MaxMetricsHistroyCount {
 		trafficMetric = trafficMetric[1:]
 	}
 
@@ -393,7 +464,7 @@ func updateRTTMetrics(metric *SessionMetric, oldMetric SessionMetric, session Bg
 	rttMetric := oldMetric.RTT.Metric
 	rttMetric = append(rttMetric, [2]int{int(timestamp), rttValue})
 
-	if len(rttMetric) > MAX_METRICS_HISTORY {
+	if len(rttMetric) > cfg.Metric.MaxMetricsHistroyCount {
 		rttMetric = rttMetric[1:]
 	}
 
@@ -506,7 +577,7 @@ func updateTraditionalBGPRouteMetrics(metric *SessionMetric, oldMetric SessionMe
 // updateRouteMetricsArray updates a route metrics array with new data
 func updateRouteMetricsArray(metricArray *[][2]int64, oldArray [][2]int64, timestamp, value int64) {
 	newArray := append(oldArray, [2]int64{timestamp, value})
-	if len(newArray) > MAX_METRICS_HISTORY {
+	if len(newArray) > cfg.Metric.MaxMetricsHistroyCount {
 		newArray = newArray[1:]
 	}
 	*metricArray = newArray
@@ -581,7 +652,6 @@ func measureRTT(sessionUUID, ipv4, ipv6, ipv6ll string) int {
 	// Try protocols in determined order
 	for _, proto := range attemptOrder {
 		var rtt int
-
 		switch proto {
 		case "ipv6ll":
 			if ipv6ll != "" {
@@ -622,9 +692,8 @@ func updateRTTTracker(sessionUUID, preferredProtocol string, rtt int) {
 
 	tracker, exists := rttTrackers[sessionUUID]
 	if !exists {
-		tracker = &RTTTracker{}
+		tracker = &RTTTracker{LastRTT: -1} // Initialize LastRTT with -1
 		rttTrackers[sessionUUID] = tracker
-		tracker.LastRTT = -1 // Initialize with -1
 	}
 
 	if preferredProtocol != "" {
@@ -633,6 +702,9 @@ func updateRTTTracker(sessionUUID, preferredProtocol string, rtt int) {
 		tracker.LastRTT = rtt
 	}
 }
+
+// Map to cache recently failed ping attempts to reduce timeout for known bad IPs
+var failedPingCache = make(map[string]time.Time)
 
 // Actual implementation of ping RTT measurement using tcping
 func pingRTT(ip string) int {
@@ -646,7 +718,7 @@ func pingRTT(ip string) int {
 	pingCount := cfg.Metric.PingCount
 
 	if exists && time.Since(lastKnownFailedIP) < 10*time.Minute {
-		pingCount = 1 // Just do a single ping attempt for recently failed destinations
+		pingCount = cfg.Metric.PingCountOnFail // Just do PingCountOnFail attempts for recently failed destinations
 	}
 
 	// Try port 179 (standard BGP port)
@@ -668,20 +740,9 @@ func pingRTT(ip string) int {
 	return rtt
 }
 
-// Map to cache recently failed ping attempts to reduce timeout for known bad IPs
-var failedPingCache = make(map[string]time.Time)
-
-// batchMeasureRTT processes multiple RTT measurements in parallel
-// This function is meant to be called before the regular metric collection cycle
-func batchMeasureRTT() {
-	// Use atomic operations to prevent multiple concurrent batch operations
-	if !atomic.CompareAndSwapInt32(&batchRTTRunning, 0, 1) {
-		// Another batch operation is already running, skip this one
-		log.Println("[Metrics] Skipping batch RTT measurement - another operation is in progress, ping worker may not enough, current worker count:", PING_WORKER_COUNT)
-		return
-	}
-	defer atomic.StoreInt32(&batchRTTRunning, 0)
-
+// batchMeasureRTT processes multiple RTT measurements in parallel with context cancellation support
+// This function is meant to be called as a background task before the regular metric collection cycle
+func batchMeasureRTT(ctx context.Context) {
 	sessionMutex.RLock()
 	sessions := make([]BgpSession, 0, len(localSessions))
 	for _, session := range localSessions {
@@ -699,7 +760,7 @@ func batchMeasureRTT() {
 	startTime := time.Now()
 
 	// Create a worker pool with a reasonable number of workers
-	workerCount := min(len(sessions), PING_WORKER_COUNT)
+	workerCount := min(len(sessions), cfg.Metric.PingWorkerCount)
 
 	// Create channels for work distribution
 	jobs := make(chan BgpSession, len(sessions))
@@ -707,42 +768,75 @@ func batchMeasureRTT() {
 
 	// Start worker goroutines
 	for w := 1; w <= workerCount; w++ {
-		go rttWorker(jobs, results)
+		go rttWorker(ctx, jobs, results)
 	}
 
 	// Send sessions to be processed
 	for _, session := range sessions {
-		jobs <- session
+		select {
+		case jobs <- session:
+		case <-ctx.Done():
+			close(jobs)
+			log.Printf("[Metrics] Batch RTT measurement cancelled")
+			return
+		}
 	}
 	close(jobs)
 
-	// Wait for all jobs to complete
-	for range sessions {
-		<-results
+	// Wait for all jobs to complete or context cancellation
+	completedJobs := 0
+	for completedJobs < len(sessions) {
+		select {
+		case <-results:
+			completedJobs++
+		case <-ctx.Done():
+			log.Printf("[Metrics] Batch RTT measurement cancelled after %d/%d jobs", completedJobs, len(sessions))
+			return
+		}
 	}
 
 	duration := time.Since(startTime)
 	log.Printf("[Metrics] Completed batch RTT measurement for %d sessions in %v", len(sessions), duration)
 }
 
-// rttWorker is a worker goroutine that processes RTT measurements
-func rttWorker(jobs <-chan BgpSession, results chan<- struct{}) {
-	for session := range jobs {
-		ipv6LinkLocal := session.IPv6LinkLocal
-		if ipv6LinkLocal != "" {
-			ipv6LinkLocal = fmt.Sprintf("%s%%%s", session.IPv6LinkLocal, session.Interface)
+// rttWorker is a worker goroutine that processes RTT measurements with context cancellation support
+func rttWorker(ctx context.Context, jobs <-chan BgpSession, results chan<- struct{}) {
+	for {
+		select {
+		case session, ok := <-jobs:
+			if !ok {
+				return
+			}
+
+			// Check if context is cancelled before processing
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+
+			ipv6LinkLocal := session.IPv6LinkLocal
+			if ipv6LinkLocal != "" {
+				ipv6LinkLocal = fmt.Sprintf("%s%%%s", session.IPv6LinkLocal, session.Interface)
+			}
+
+			// Perform RTT measurement
+			measureRTT(
+				session.UUID,
+				session.IPv4,
+				session.IPv6,
+				ipv6LinkLocal,
+			)
+
+			// Signal that this job is done
+			select {
+			case results <- struct{}{}:
+			case <-ctx.Done():
+				return
+			}
+		case <-ctx.Done():
+			return
 		}
-
-		// Perform RTT measurement
-		measureRTT(
-			session.UUID,
-			session.IPv4,
-			session.IPv6,
-			ipv6LinkLocal,
-		)
-
-		// Signal that this job is done
-		results <- struct{}{}
 	}
 }
 
@@ -821,7 +915,7 @@ func performRTTCacheCleanup() {
 		cleanupTime.Format(time.RFC3339), trackersRemoved, cacheEntriesRemoved)
 }
 
-// metricTask schedules periodic metrics collection
+// metricTask schedules periodic metrics collection with integrated RTT measurement
 func metricTask(ctx context.Context, wg *sync.WaitGroup) {
 	defer wg.Done()
 
@@ -834,15 +928,28 @@ func metricTask(ctx context.Context, wg *sync.WaitGroup) {
 		cleanupRTTCache(cleanupCtx)
 	}()
 
-	// Make sure to wait for cleanup goroutine to finish
+	// Start the RTT measurement routine as a background sub task
+	rttCtx, rttCancel := context.WithCancel(ctx)
+	var rttWg sync.WaitGroup
+	rttWg.Add(1)
+	go func() {
+		defer rttWg.Done()
+		batchRTTSubTask(rttCtx)
+	}()
+
+	// Make sure to wait for all background goroutines to finish
 	defer func() {
 		shutdownStart := time.Now()
-		log.Println("[Metrics] Canceling RTT cache cleanup routine...")
+		log.Println("[Metrics] Canceling RTT measurement and cache cleanup routines...")
+
+		// Cancel both background tasks
+		rttCancel()
 		cleanupCancel()
 
 		// Set a timeout for cleanup
 		cleanupDone := make(chan struct{})
 		go func() {
+			rttWg.Wait()
 			cleanupWg.Wait()
 			close(cleanupDone)
 		}()
@@ -850,9 +957,9 @@ func metricTask(ctx context.Context, wg *sync.WaitGroup) {
 		// Wait for cleanup with timeout
 		select {
 		case <-cleanupDone:
-			log.Printf("[Metrics] RTT cache cleanup completed in %v", time.Since(shutdownStart))
+			log.Printf("[Metrics] RTT measurement and cache cleanup completed in %v", time.Since(shutdownStart))
 		case <-time.After(5 * time.Second):
-			log.Printf("[Metrics] RTT cache cleanup timed out after %v", time.Since(shutdownStart))
+			log.Printf("[Metrics] RTT measurement and cache cleanup timed out after %v", time.Since(shutdownStart))
 		}
 	}()
 
@@ -878,6 +985,30 @@ func metricTask(ctx context.Context, wg *sync.WaitGroup) {
 			return
 		case <-ticker.C:
 			collectMetrics()
+		}
+	}
+}
+
+// batchRTTTask runs periodic RTT measurements as a background task
+func batchRTTSubTask(ctx context.Context) {
+	// Create a ticker for RTT measurement interval
+	// RTT measurements should be more frequent than metric collection to provide fresh data
+	rttInterval := max(time.Duration(cfg.PeerAPI.MetricInterval)*time.Second, 60*time.Second)
+
+	ticker := time.NewTicker(rttInterval)
+	defer ticker.Stop()
+
+	// Perform initial RTT measurement
+	log.Printf("[Metrics] Starting RTT measurement task with interval %v", rttInterval)
+	batchMeasureRTT(ctx)
+
+	for {
+		select {
+		case <-ctx.Done():
+			log.Println("[Metrics] RTT measurement task shutting down...")
+			return
+		case <-ticker.C:
+			batchMeasureRTT(ctx)
 		}
 	}
 }

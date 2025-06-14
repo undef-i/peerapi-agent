@@ -63,7 +63,7 @@ func getBgpSessions() ([]BgpSession, error) {
 	}
 
 	if response.Code != 0 {
-		return nil, fmt.Errorf("[GetBGPSessions] peerAPI returned error: %s", response.Message)
+		return nil, fmt.Errorf("[GetBGPSessions] got an error response from PeerAPI: %s", response.Message)
 	}
 
 	// Parse BGP sessions data
@@ -119,7 +119,7 @@ func reportNewStatusToCenter(sessionUUID string, status int) error {
 	}
 
 	if response.Code != 0 {
-		return fmt.Errorf("<%s> peerAPI returned error: %s", sessionUUID, response.Message)
+		return fmt.Errorf("<%s> got an error response from PeerAPI: %s", sessionUUID, response.Message)
 	}
 
 	return nil

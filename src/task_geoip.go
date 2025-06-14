@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"log"
+	"net"
+	"os/exec"
 	"strings"
 	"sync"
 	"time"
@@ -15,14 +17,88 @@ func checkSessionGeoLocation(session *BgpSession) bool {
 	// - Auto teardown is not enabled
 	// - GeoIP database is not initialized
 	// - Session endpoint is empty
-	if !cfg.Metric.AutoTeardown || geoDB == nil || session.Endpoint == "" {
+	if !cfg.Metric.AutoTeardown || geoDB == nil {
 		return false
 	}
 
-	// Get country code from the endpoint
-	countryCode, err := geoIPCountryCode(geoDB, session.Endpoint)
+	var endpointsToCheck []string
+
+	// Always check the configured session endpoint if available
+	if session.Endpoint != "" {
+		endpointsToCheck = append(endpointsToCheck, session.Endpoint)
+	}
+
+	// For WireGuard sessions, also check the actual WireGuard endpoint
+	if session.Type == "wireguard" && session.Interface != "" && session.Credential != "" {
+		wgEndpoint := getWireGuardEndpoint(session.Interface, session.Credential)
+		if wgEndpoint != "" && wgEndpoint != session.Endpoint {
+			endpointsToCheck = append(endpointsToCheck, wgEndpoint)
+		}
+	}
+
+	// If no endpoints to check, don't teardown
+	if len(endpointsToCheck) == 0 {
+		return false
+	}
+
+	// Check each endpoint
+	for _, endpoint := range endpointsToCheck {
+		if shouldTeardownForEndpoint(session, endpoint) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// getWireGuardEndpoint gets the actual endpoint for a WireGuard interface/peer combination
+func getWireGuardEndpoint(interfaceName, publicKey string) string {
+	// Create context with timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Run 'wg show <interface> endpoints'
+	cmd := exec.CommandContext(ctx, cfg.WireGuard.WGCommandPath, "show", interfaceName, "endpoints")
+	output, err := cmd.CombinedOutput()
 	if err != nil {
-		log.Printf("<%s> Failed to get country code for %s: %v", session.UUID, session.Endpoint, err)
+		log.Printf("[GeoCheck] Failed to get WireGuard endpoints for interface %s: %v", interfaceName, err)
+		return ""
+	}
+
+	// Parse the output to find the endpoint for our public key
+	// Output format: <public_key>\t<endpoint>
+	lines := strings.SplitSeq(string(output), "\n")
+	for line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+
+		parts := strings.Split(line, "\t")
+		if len(parts) != 2 {
+			continue
+		}
+
+		if strings.TrimSpace(parts[0]) == publicKey {
+			endpoint := strings.TrimSpace(parts[1])
+			// Remove port if present (we only care about the IP/hostname for geo checking)
+			if host, _, err := net.SplitHostPort(endpoint); err == nil {
+				return host
+			}
+			return endpoint
+		}
+	}
+
+	// If we don't find the public key, return empty
+	return ""
+}
+
+// shouldTeardownForEndpoint checks if a specific endpoint should cause session teardown
+func shouldTeardownForEndpoint(session *BgpSession, endpoint string) bool {
+	// Get country code from the endpoint
+	countryCode, err := geoIPCountryCode(geoDB, endpoint)
+	if err != nil {
+		log.Printf("<%s> Failed to get country code for %s: %v", session.UUID, endpoint, err)
 		return false // On error, don't teardown
 	}
 
@@ -34,18 +110,18 @@ func checkSessionGeoLocation(session *BgpSession) bool {
 	// Check whitelist/blacklist based on configuration
 	switch strings.ToLower(cfg.Metric.GeoIPCountryMode) {
 	case "whitelist":
-		return checkWhitelistMode(session, countryCode)
+		return checkWhitelistModeForEndpoint(session, endpoint, countryCode)
 	case "blacklist":
-		return checkBlacklistMode(session, countryCode)
+		return checkBlacklistModeForEndpoint(session, endpoint, countryCode)
 	default:
 		// For any other mode, don't teardown
 		return false
 	}
 }
 
-// checkWhitelistMode checks if a country is in the whitelist
+// checkWhitelistModeForEndpoint checks if a country is in the whitelist for a specific endpoint
 // Returns true if the session should be torn down
-func checkWhitelistMode(session *BgpSession, countryCode string) bool {
+func checkWhitelistModeForEndpoint(session *BgpSession, endpoint, countryCode string) bool {
 	// In whitelist mode, tear down if country is NOT in the whitelist
 	for _, allowedCountry := range cfg.Metric.WhitelistGeoCountries {
 		if strings.EqualFold(countryCode, allowedCountry) {
@@ -56,19 +132,19 @@ func checkWhitelistMode(session *BgpSession, countryCode string) bool {
 
 	// Country not found in whitelist - should be torn down
 	log.Printf("<%s> Endpoint %s, Country %s is not in the whitelist, session will be torn down",
-		session.UUID, session.Endpoint, countryCode)
+		session.UUID, endpoint, countryCode)
 	return true
 }
 
-// checkBlacklistMode checks if a country is in the blacklist
+// checkBlacklistModeForEndpoint checks if a country is in the blacklist for a specific endpoint
 // Returns true if the session should be torn down
-func checkBlacklistMode(session *BgpSession, countryCode string) bool {
+func checkBlacklistModeForEndpoint(session *BgpSession, endpoint, countryCode string) bool {
 	// In blacklist mode, tear down if country IS in the blacklist
 	for _, blockedCountry := range cfg.Metric.BlacklistGeoCountries {
 		if strings.EqualFold(countryCode, blockedCountry) {
 			// Country is in blacklist, so teardown
 			log.Printf("<%s> Endpoint %s, Country %s is in the blacklist, session will be torn down",
-				session.UUID, session.Endpoint, countryCode)
+				session.UUID, endpoint, countryCode)
 			return true
 		}
 	}

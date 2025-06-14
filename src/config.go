@@ -52,6 +52,7 @@ type wireGuardConfig struct {
 	PrivateKey                     string `json:"-"`
 	PublicKey                      string `json:"-"`
 	PersistentKeepaliveInterval    int    `json:"persistentKeepaliveInterval"` // Persistent keepalive interval in seconds
+	DNSUpdateInterval              int    `json:"dnsUpdateInterval"`           // Interval for WireGuard DNS endpoint updates in seconds
 	DN42BandwidthCommunity         int    `json:"dn42BandwidthCommunity"`
 	DN42InterfaceSecurityCommunity int    `json:"dn42InterfaceSecurityCommunity"`
 }
@@ -83,6 +84,10 @@ type metricConfig struct {
 	WhitelistGeoCountries         []string `json:"whitelistGeoCountries"`         // List of countries to whitelist
 	PingTimeout                   int      `json:"pingTimeout"`                   // Timeout for ping requests in seconds
 	PingCount                     int      `json:"pingCount"`                     // Number of ping attempts
+	PingCountOnFail               int      `json:"pingCountOnFail"`               // If ping fails, retry with only pingCountOnFail times to avoid blocking the system
+	PingWorkerCount               int      `json:"pingWorkerCount"`               // Number of workers for parallel pinging, don't create too many or we might overwhelm the system
+	SessionWorkerCount            int      `json:"sessionWorkerCount"`            // Number of workers for parallel session metric collection (default: 8)
+	MaxMetricsHistroyCount        int      `json:"maxMetricsHistroyCount"`        // Maximum number of historical metrics to keep for each metric type of each session
 	GeoCheckInterval              int      `json:"geoCheckInterval"`              // Interval for geo check task in seconds
 	BGPCommunityUpdateInterval    int      `json:"bgpCommunityUpdateInterval"`    // Interval for DN42 BGP community update task in seconds
 }

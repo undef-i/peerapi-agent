@@ -50,6 +50,10 @@
     "whitelistGeoCountries": [ "US", "DE", "FR", "GB", "NL", "JP", "CA", "AU" ],
     "pingTimeout": 5,
     "pingCount": 4,
+    "pingCountOnFail": 1, // If ping fails, retry with only pingCountOnFail times to avoid blocking the system
+    "pingWorkerCount": 64, // Number of workers for parallel pinging, don't create too many or we might overwhelm the system
+    "sessionWorkerCount": 64, // Number of workers for parallel session metric collection
+    "maxMetricsHistroy": 288, // Defines how many historical metric points to store
     "geoCheckInterval": 900,
     "bgpCommunityUpdateInterval": 3600
   },
@@ -62,6 +66,7 @@
     "privateKeyPath": "/etc/wireguard/privatekey",
     "publicKeyPath": "/etc/wireguard/publickey",
     "persistentKeepaliveInterval": 25,
+    "dnsUpdateInterval": 60,
     "localEndpointHost":"jp-118.dn42.iedon.net",
     "dn42BandwidthCommunity": 24,
     "dn42InterfaceSecurityCommunity": 34

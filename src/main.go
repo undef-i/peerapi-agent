@@ -19,7 +19,7 @@ import (
 
 const (
 	SERVER_NAME    = "iEdon-PeerAPI-Agent"
-	SERVER_VERSION = "1.0.6"
+	SERVER_VERSION = "1.1.0"
 )
 
 var SERVER_SIGNATURE = fmt.Sprintf("%s (%s; %s; %s)", SERVER_NAME+"/"+SERVER_VERSION, runtime.GOOS, runtime.GOARCH, runtime.Version())
@@ -124,13 +124,14 @@ func main() {
 	var wg sync.WaitGroup
 
 	// Start background tasks with context and waitgroup
-	wg.Add(6) // 6 is the number of background tasks
+	wg.Add(7) // 7 is the number of background tasks
 	go heartbeatTask(ctx, &wg)
 	go mainSessionTask(ctx, &wg)
 	go metricTask(ctx, &wg)
 	go bandwidthMonitorTask(ctx, &wg)
 	go dn42BGPCommunityTask(ctx, &wg)
 	go geoCheckTask(ctx, &wg)
+	go wireGuardDNSTask(ctx, &wg)
 
 	// Set up signal handling for graceful shutdown
 	shutdownChan := make(chan os.Signal, 1)
@@ -177,7 +178,7 @@ func main() {
 	}
 
 	// Wait for all background tasks to complete with timeout
-	log.Printf("Waiting for %d background tasks to complete...", 6) // 6 is the number of background tasks
+	log.Printf("Waiting for %d background tasks to complete...", 7) // 7 is the number of background tasks
 	taskShutdownStart := time.Now()
 
 	waitChan := make(chan struct{})
