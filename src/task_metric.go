@@ -437,7 +437,7 @@ func updateTrafficMetrics(metric *SessionMetric, oldMetric SessionMetric, timest
 		metric.Interface.Traffic.Current[1],
 	})
 
-	if len(trafficMetric) > cfg.Metric.MaxMetricsHistroyCount {
+	if len(trafficMetric) > cfg.Metric.MaxMetricsHistroy {
 		trafficMetric = trafficMetric[1:]
 	}
 
@@ -464,7 +464,7 @@ func updateRTTMetrics(metric *SessionMetric, oldMetric SessionMetric, session Bg
 	rttMetric := oldMetric.RTT.Metric
 	rttMetric = append(rttMetric, [2]int{int(timestamp), rttValue})
 
-	if len(rttMetric) > cfg.Metric.MaxMetricsHistroyCount {
+	if len(rttMetric) > cfg.Metric.MaxMetricsHistroy {
 		rttMetric = rttMetric[1:]
 	}
 
@@ -577,7 +577,7 @@ func updateTraditionalBGPRouteMetrics(metric *SessionMetric, oldMetric SessionMe
 // updateRouteMetricsArray updates a route metrics array with new data
 func updateRouteMetricsArray(metricArray *[][2]int64, oldArray [][2]int64, timestamp, value int64) {
 	newArray := append(oldArray, [2]int64{timestamp, value})
-	if len(newArray) > cfg.Metric.MaxMetricsHistroyCount {
+	if len(newArray) > cfg.Metric.MaxMetricsHistroy {
 		newArray = newArray[1:]
 	}
 	*metricArray = newArray
