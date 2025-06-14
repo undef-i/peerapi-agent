@@ -17,6 +17,10 @@ type BirdConn struct {
 // Read reads output from the BIRD socket, removes preceding status numbers,
 // and writes the result to the output buffer.
 func (b *BirdConn) Read(outputBuffer io.Writer) {
+	if b == nil || b.conn == nil {
+		return
+	}
+
 	const (
 		StatusSize  = 4
 		NewlineChar = '\n'
@@ -51,6 +55,12 @@ func (b *BirdConn) Read(outputBuffer io.Writer) {
 
 // Write writes a command string to the BIRD socket with a newline appended.
 func (b *BirdConn) Write(s string) error {
+	if b == nil {
+		return fmt.Errorf("BirdConn is nil")
+	}
+	if b.conn == nil {
+		return fmt.Errorf("connection is nil")
+	}
 	if _, err := b.conn.Write([]byte(s + "\n")); err != nil {
 		return fmt.Errorf("failed to write command: %w", err)
 	}

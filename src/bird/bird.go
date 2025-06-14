@@ -121,11 +121,14 @@ func (bp *BirdPool) GetConnection() (*PooledConnection, error) {
 	// Try to get an available connection from channel first (fast path)
 	select {
 	case pc := <-bp.available:
-		bp.Lock()
-		pc.inUse = true
-		pc.lastUsed = time.Now()
-		bp.Unlock()
-		return pc, nil
+		if pc != nil && pc.conn != nil {
+			bp.Lock()
+			pc.inUse = true
+			pc.lastUsed = time.Now()
+			bp.Unlock()
+			return pc, nil
+		}
+		// Connection is invalid, fall through to create new one
 	default:
 		// No immediately available connection, try to create new one or wait
 	}
@@ -157,21 +160,30 @@ func (bp *BirdPool) GetConnection() (*PooledConnection, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	select {
-	case pc := <-bp.available:
-		bp.Lock()
-		pc.inUse = true
-		pc.lastUsed = time.Now()
-		bp.Unlock()
-		return pc, nil
-	case <-ctx.Done():
-		return nil, fmt.Errorf("timeout waiting for available connection")
-	case <-bp.shutdown:
-		return nil, fmt.Errorf("connection pool is shutting down")
+	for {
+		select {
+		case pc := <-bp.available:
+			if pc != nil && pc.conn != nil {
+				bp.Lock()
+				pc.inUse = true
+				pc.lastUsed = time.Now()
+				bp.Unlock()
+				return pc, nil
+			}
+			// Connection is invalid, continue waiting
+		case <-ctx.Done():
+			return nil, fmt.Errorf("timeout waiting for available connection")
+		case <-bp.shutdown:
+			return nil, fmt.Errorf("connection pool is shutting down")
+		}
 	}
 }
 
 func (bp *BirdPool) ReleaseConnection(pc *PooledConnection) {
+	if pc == nil {
+		return
+	}
+
 	bp.Lock()
 	pc.inUse = false
 	pc.lastUsed = time.Now()
@@ -222,6 +234,8 @@ drainComplete:
 // poolMaintenance periodically checks for and removes stale connections
 func (bp *BirdPool) poolMaintenance() {
 	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
 	for {
 		select {
 		case <-ticker.C:
@@ -230,6 +244,10 @@ func (bp *BirdPool) poolMaintenance() {
 				now := time.Now()
 				newPool := make([]*PooledConnection, 0, bp.poolSize)
 				for _, pc := range bp.pool {
+					if pc == nil {
+						continue
+					}
+
 					// Keep if in use or if it's part of the base pool size
 					if pc.inUse || len(newPool) < bp.poolSize {
 						newPool = append(newPool, pc)
@@ -250,7 +268,6 @@ func (bp *BirdPool) poolMaintenance() {
 			}
 			bp.Unlock()
 		case <-bp.shutdown:
-			ticker.Stop()
 			return
 		}
 	}
@@ -263,17 +280,37 @@ func (bp *BirdPool) WithConnection(fn func(conn *BirdConn) error) error {
 	}
 	defer bp.ReleaseConnection(pc)
 
+	// Check if connection is nil before use
+	if pc.conn == nil {
+		// Try to create a new connection
+		newConn, createErr := bp.createConnection()
+		if createErr != nil {
+			return fmt.Errorf("connection is nil and failed to create new connection: %v", createErr)
+		}
+		bp.Lock()
+		pc.conn = newConn
+		bp.Unlock()
+	}
+
 	err = fn(pc.conn)
 	if err != nil {
-		// Try to reconnect on error
-		if newConn, reconnErr := bp.createConnection(); reconnErr == nil {
+		// Try to reconnect on error - use atomic replacement
+		newConn, reconnErr := bp.createConnection()
+		if reconnErr == nil {
 			bp.Lock()
-			pc.conn.Close()
+			oldConn := pc.conn
 			pc.conn = newConn
 			bp.Unlock()
 
-			// Retry the operation once
-			err = fn(pc.conn)
+			// Close old connection safely
+			if oldConn != nil {
+				oldConn.Close()
+			}
+
+			// Retry the operation once with the new connection
+			if pc.conn != nil {
+				err = fn(pc.conn)
+			}
 		}
 	}
 	return err

@@ -103,8 +103,8 @@ func checkAndUpdateWireGuardEndpoint(session *BgpSession) {
 			log.Printf("[WireGuardDNS] <%s> Failed to update endpoint for interface %s: %v",
 				session.UUID, session.Interface, err)
 		} else {
-			log.Printf("[WireGuardDNS] <%s> Successfully updated endpoint for interface %s to %s",
-				session.UUID, session.Interface, session.Endpoint)
+			// log.Printf("[WireGuardDNS] <%s> Successfully updated endpoint for interface %s to %s",
+			//	session.UUID, session.Interface, session.Endpoint)
 		}
 	}
 	// else {

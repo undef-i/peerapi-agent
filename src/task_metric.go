@@ -796,7 +796,7 @@ func batchMeasureRTT(ctx context.Context) {
 	}
 
 	duration := time.Since(startTime)
-	log.Printf("[Metrics] Completed batch RTT measurement for %d sessions in %v", len(sessions), duration)
+	log.Printf("[Metrics] Completed batch RTT measurement for %d sessions using %d workers in %v", len(sessions), workerCount, duration)
 }
 
 // rttWorker is a worker goroutine that processes RTT measurements with context cancellation support
