@@ -114,8 +114,8 @@ func updateFilterParams() {
 		latencyCommunityValue := getLatencyCommunityValue(rtt)
 
 		// Log RTT value and corresponding community
-		log.Printf("[DN42BGPCommunity] Session %s has RTT %d ms, mapped to community value %d",
-			session.UUID, rtt, latencyCommunityValue)
+		// log.Printf("[DN42BGPCommunity] Session %s has RTT %d ms, mapped to community value %d",
+		//	session.UUID, rtt, latencyCommunityValue)
 
 		// Get bandwidth and security community values based on session type
 		ifBwCommunity, ifSecCommunity := getCommunityValues(session.Type)
@@ -139,8 +139,8 @@ func updateFilterParams() {
 // with latency community values
 func updateBirdConfig(session *BgpSession, latencyCommunity, ifBwCommunity, ifSecCommunity int) error {
 	confPath := path.Join(cfg.Bird.BGPPeerConfDir, session.Interface+".conf")
-	log.Printf("[DN42BGPCommunity] Updating BIRD config for session %s (interface: %s) with latency community value %d",
-		session.UUID, session.Interface, latencyCommunity)
+	// log.Printf("[DN42BGPCommunity] Updating BIRD config for session %s (interface: %s) with latency community value %d",
+	//	session.UUID, session.Interface, latencyCommunity)
 
 	birdConfMutex.Lock()
 	defer birdConfMutex.Unlock()
@@ -241,8 +241,8 @@ func updateBirdConfig(session *BgpSession, latencyCommunity, ifBwCommunity, ifSe
 		}
 	}
 
-	log.Printf("[DN42BGPCommunity] Successfully updated BIRD config for session %s with latency community %d",
-		session.UUID, latencyCommunity)
+	// log.Printf("[DN42BGPCommunity] Successfully updated BIRD config for session %s with latency community %d",
+	//	session.UUID, latencyCommunity)
 	return nil
 }
 

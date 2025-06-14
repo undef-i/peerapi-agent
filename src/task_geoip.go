@@ -31,7 +31,7 @@ func checkSessionGeoLocation(session *BgpSession) bool {
 	// For WireGuard sessions, also check the actual WireGuard endpoint
 	if session.Type == "wireguard" && session.Interface != "" && session.Credential != "" {
 		wgEndpoint := getWireGuardEndpoint(session.Interface, session.Credential)
-		if wgEndpoint != "" && wgEndpoint != session.Endpoint {
+		if wgEndpoint != "" && wgEndpoint != "(none)" && wgEndpoint != session.Endpoint {
 			endpointsToCheck = append(endpointsToCheck, wgEndpoint)
 		}
 	}
