@@ -53,7 +53,7 @@
     "pingCountOnFail": 1,
     "pingWorkerCount": 64,
     "sessionWorkerCount": 64,
-    "maxMetricsHistroy": 288,
+    "maxRTTMetricsHistroy": 288,
     "geoCheckInterval": 900,
     "bgpCommunityUpdateInterval": 3600
   },

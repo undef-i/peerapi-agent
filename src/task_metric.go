@@ -175,8 +175,6 @@ func collectSessionMetric(session BgpSession, timestamp int64, birdMetrics map[s
 	sessionName := fmt.Sprintf("DN42_%d_%s", session.ASN, session.Interface)
 	mpBGP := slices.Contains(session.Extensions, "mp-bgp")
 
-	// Initialize variables for BGP metrics
-	var ipv4Import, ipv4Export, ipv6Import, ipv6Export int64
 	var bgpMetrics []BGPMetric
 
 	// Collect BGP metrics using pre-fetched data
@@ -188,10 +186,6 @@ func collectSessionMetric(session BgpSession, timestamp int64, birdMetrics map[s
 					int(metrics.IPv4Import), int(metrics.IPv4Export),
 					int(metrics.IPv6Import), int(metrics.IPv6Export)),
 			}
-			ipv4Import = metrics.IPv4Import
-			ipv4Export = metrics.IPv4Export
-			ipv6Import = metrics.IPv6Import
-			ipv6Export = metrics.IPv6Export
 		} else {
 			// Default empty metrics if BIRD data is missing
 			bgpMetrics = []BGPMetric{
@@ -207,8 +201,6 @@ func collectSessionMetric(session BgpSession, timestamp int64, birdMetrics map[s
 			if metrics, exists := birdMetrics[v6Name]; exists {
 				bgpMetrics = append(bgpMetrics, createBGPMetric(v6Name, metrics.State, metrics.Info, BGP_SESSION_TYPE_IPV6,
 					0, 0, int(metrics.IPv6Import), int(metrics.IPv6Export)))
-				ipv6Import = metrics.IPv6Import
-				ipv6Export = metrics.IPv6Export
 			} else {
 				bgpMetrics = append(bgpMetrics, createBGPMetric(v6Name, "Unknown", "No data", BGP_SESSION_TYPE_IPV6, 0, 0, 0, 0))
 			}
@@ -219,8 +211,6 @@ func collectSessionMetric(session BgpSession, timestamp int64, birdMetrics map[s
 			if metrics, exists := birdMetrics[v4Name]; exists {
 				bgpMetrics = append(bgpMetrics, createBGPMetric(v4Name, metrics.State, metrics.Info, BGP_SESSION_TYPE_IPV4,
 					int(metrics.IPv4Import), int(metrics.IPv4Export), 0, 0))
-				ipv4Import = metrics.IPv4Import
-				ipv4Export = metrics.IPv4Export
 			} else {
 				bgpMetrics = append(bgpMetrics, createBGPMetric(v4Name, "Unknown", "No data", BGP_SESSION_TYPE_IPV4, 0, 0, 0, 0))
 			}
@@ -233,11 +223,8 @@ func collectSessionMetric(session BgpSession, timestamp int64, birdMetrics map[s
 	// Get current traffic rates from localTrafficRate
 	rxRate, txRate := getTrafficRates(session.Interface)
 
-	// Initialize new metric
-	metric := initializeSessionMetric(session, timestamp, bgpMetrics, rx, tx, rxRate, txRate)
-
-	// Update metrics with historical data if available
-	updateMetricsWithHistory(session, timestamp, &metric, ipv4Import, ipv4Export, ipv6Import, ipv6Export, mpBGP)
+	// Generate latest metric
+	metric := generateSessionMetric(session, timestamp, bgpMetrics, rx, tx, rxRate, txRate)
 
 	return metric, nil
 }
@@ -326,21 +313,17 @@ func createBGPMetric(name, state, info, sessionType string, ipv4Import, ipv4Expo
 			IPv4: RouteMetricStruct{
 				Imported: RouteMetrics{
 					Current: ipv4Import,
-					Metric:  make([][2]int64, 0),
 				},
 				Exported: RouteMetrics{
 					Current: ipv4Export,
-					Metric:  make([][2]int64, 0),
 				},
 			},
 			IPv6: RouteMetricStruct{
 				Imported: RouteMetrics{
 					Current: ipv6Import,
-					Metric:  make([][2]int64, 0),
 				},
 				Exported: RouteMetrics{
 					Current: ipv6Export,
-					Metric:  make([][2]int64, 0),
 				},
 			},
 		},
@@ -360,8 +343,25 @@ func getTrafficRates(interfaceName string) (int64, int64) {
 	return rxRate, txRate
 }
 
-// initializeSessionMetric creates and initializes a new session metric
-func initializeSessionMetric(session BgpSession, timestamp int64, bgpMetrics []BGPMetric, rx, tx uint64, rxRate, txRate int64) SessionMetric {
+// generateSessionMetric creates and initializes a new session metric
+func generateSessionMetric(session BgpSession, timestamp int64, bgpMetrics []BGPMetric, rx, tx uint64, rxRate, txRate int64) SessionMetric {
+	// Check if we have a recent RTT value (less than 5 minutes old)
+	var rttValue int
+	var lossRate float64
+
+	rttMutex.Lock()
+	tracker, exists := rttTrackers[session.UUID]
+
+	if exists {
+		// Use the cached RTT value if recent enough
+		rttValue = tracker.LastRTT
+		lossRate = tracker.MetricAvgLoss
+	} else {
+		rttValue = -1 // Default to -1 if no tracker exists
+		lossRate = 0.0
+	}
+	rttMutex.Unlock()
+
 	return SessionMetric{
 		UUID:      session.UUID,
 		ASN:       session.ASN,
@@ -389,238 +389,12 @@ func initializeSessionMetric(session BgpSession, timestamp int64, bgpMetrics []B
 			Traffic: InterfaceTrafficMetric{
 				Total:   []int64{int64(tx), int64(rx)}, // [Tx, Rx] - total bytes
 				Current: []int64{txRate, rxRate},       // [Tx, Rx] - current rate in bytes per second
-				Metric:  make([][3]int64, 0),           // [timestamp, Tx, Rx]
 			},
 		},
 		RTT: RTT{
-			Current: -1, // Will be updated later with ping data
-			Metric:  make([][2]int, 0),
+			Current: rttValue,
+			Loss:    lossRate,
 		},
-	}
-}
-
-// updateMetricsWithHistory updates metrics with historical data if available
-func updateMetricsWithHistory(session BgpSession, timestamp int64, metric *SessionMetric,
-	ipv4Import, ipv4Export, ipv6Import, ipv6Export int64, mpBGP bool) {
-
-	metricMutex.RLock()
-	defer metricMutex.RUnlock()
-
-	// Get old metrics if available
-	oldMetric, exists := localMetrics[session.UUID]
-	if exists {
-		// Update traffic metrics history
-		updateTrafficMetrics(metric, oldMetric, timestamp)
-
-		// Update RTT metrics
-		updateRTTMetrics(metric, oldMetric, session, timestamp)
-		// Update route metrics
-		if mpBGP {
-			updateMPBGPRouteMetrics(metric, oldMetric, timestamp, ipv4Import, ipv4Export, ipv6Import, ipv6Export)
-		} else {
-			updateTraditionalBGPRouteMetrics(metric, oldMetric, timestamp, ipv4Import, ipv4Export, ipv6Import, ipv6Export)
-		}
-	} else {
-		// First time collection, initialize with single data points
-		initializeFirstTimeMetrics(metric, timestamp, ipv4Import, ipv4Export, ipv6Import, ipv6Export, mpBGP)
-	}
-}
-
-// updateTrafficMetrics updates traffic metrics history
-func updateTrafficMetrics(metric *SessionMetric, oldMetric SessionMetric, timestamp int64) {
-	trafficMetric := oldMetric.Interface.Traffic.Metric
-
-	// Add new measurement [timestamp, txRate, rxRate]
-	trafficMetric = append(trafficMetric, [3]int64{
-		timestamp,
-		metric.Interface.Traffic.Current[0],
-		metric.Interface.Traffic.Current[1],
-	})
-
-	if len(trafficMetric) > cfg.Metric.MaxMetricsHistroy {
-		trafficMetric = trafficMetric[1:]
-	}
-
-	metric.Interface.Traffic.Metric = trafficMetric
-}
-
-// updateRTTMetrics updates RTT (ping) metrics with improved efficiency
-func updateRTTMetrics(metric *SessionMetric, oldMetric SessionMetric, session BgpSession, timestamp int64) {
-	// Check if we have a recent RTT value (less than 5 minutes old)
-	var rttValue int
-
-	// Use dedicated rttMutex to protect access to rttTrackers map
-	rttMutex.Lock()
-	tracker, exists := rttTrackers[session.UUID]
-
-	if exists {
-		// Use the cached RTT value if recent enough
-		rttValue = tracker.LastRTT
-	} else {
-		rttValue = -1 // Default to -1 if no tracker exists
-	}
-	rttMutex.Unlock()
-
-	rttMetric := oldMetric.RTT.Metric
-	rttMetric = append(rttMetric, [2]int{int(timestamp), rttValue})
-
-	if len(rttMetric) > cfg.Metric.MaxMetricsHistroy {
-		rttMetric = rttMetric[1:]
-	}
-
-	metric.RTT.Current = rttValue
-	metric.RTT.Metric = rttMetric
-}
-
-// updateMPBGPRouteMetrics updates route metrics for MP-BGP sessions
-func updateMPBGPRouteMetrics(metric *SessionMetric, oldMetric SessionMetric, timestamp int64,
-	ipv4Import, ipv4Export, ipv6Import, ipv6Export int64) {
-
-	if len(oldMetric.BGP) > 0 && len(metric.BGP) > 0 {
-		// Update IPv4 Imported metric history
-		updateRouteMetricsArray(
-			&metric.BGP[0].Routes.IPv4.Imported.Metric,
-			oldMetric.BGP[0].Routes.IPv4.Imported.Metric,
-			timestamp,
-			ipv4Import,
-		)
-
-		// Update IPv4 Exported metric history
-		updateRouteMetricsArray(
-			&metric.BGP[0].Routes.IPv4.Exported.Metric,
-			oldMetric.BGP[0].Routes.IPv4.Exported.Metric,
-			timestamp,
-			ipv4Export,
-		)
-
-		// Update IPv6 Imported metric history
-		updateRouteMetricsArray(
-			&metric.BGP[0].Routes.IPv6.Imported.Metric,
-			oldMetric.BGP[0].Routes.IPv6.Imported.Metric,
-			timestamp,
-			ipv6Import,
-		)
-
-		// Update IPv6 Exported metric history
-		updateRouteMetricsArray(
-			&metric.BGP[0].Routes.IPv6.Exported.Metric,
-			oldMetric.BGP[0].Routes.IPv6.Exported.Metric,
-			timestamp,
-			ipv6Export,
-		)
-	}
-}
-
-// updateTraditionalBGPRouteMetrics updates route metrics for traditional BGP sessions
-func updateTraditionalBGPRouteMetrics(metric *SessionMetric, oldMetric SessionMetric, timestamp int64,
-	ipv4Import, ipv4Export, ipv6Import, ipv6Export int64) {
-
-	// Find IPv4 and IPv6 metrics by type instead of relying on index
-	var oldIPv4Metric, oldIPv6Metric *BGPMetric
-	var newIPv4Metric, newIPv6Metric *BGPMetric
-
-	// Find old metrics by type
-	for i := range oldMetric.BGP {
-		switch oldMetric.BGP[i].Type {
-		case BGP_SESSION_TYPE_IPV4:
-			oldIPv4Metric = &oldMetric.BGP[i]
-		case BGP_SESSION_TYPE_IPV6:
-			oldIPv6Metric = &oldMetric.BGP[i]
-		}
-	}
-
-	// Find new metrics by type
-	for i := range metric.BGP {
-		switch metric.BGP[i].Type {
-		case BGP_SESSION_TYPE_IPV4:
-			newIPv4Metric = &metric.BGP[i]
-		case BGP_SESSION_TYPE_IPV6:
-			newIPv6Metric = &metric.BGP[i]
-		}
-	}
-
-	// Update IPv4 metrics if both old and new exist
-	if oldIPv4Metric != nil && newIPv4Metric != nil {
-		updateRouteMetricsArray(
-			&newIPv4Metric.Routes.IPv4.Imported.Metric,
-			oldIPv4Metric.Routes.IPv4.Imported.Metric,
-			timestamp,
-			ipv4Import,
-		)
-
-		updateRouteMetricsArray(
-			&newIPv4Metric.Routes.IPv4.Exported.Metric,
-			oldIPv4Metric.Routes.IPv4.Exported.Metric,
-			timestamp,
-			ipv4Export,
-		)
-	}
-
-	// Update IPv6 metrics if both old and new exist
-	if oldIPv6Metric != nil && newIPv6Metric != nil {
-		updateRouteMetricsArray(
-			&newIPv6Metric.Routes.IPv6.Imported.Metric,
-			oldIPv6Metric.Routes.IPv6.Imported.Metric,
-			timestamp,
-			ipv6Import,
-		)
-
-		updateRouteMetricsArray(
-			&newIPv6Metric.Routes.IPv6.Exported.Metric,
-			oldIPv6Metric.Routes.IPv6.Exported.Metric,
-			timestamp,
-			ipv6Export,
-		)
-	}
-}
-
-// updateRouteMetricsArray updates a route metrics array with new data
-func updateRouteMetricsArray(metricArray *[][2]int64, oldArray [][2]int64, timestamp, value int64) {
-	newArray := append(oldArray, [2]int64{timestamp, value})
-	if len(newArray) > cfg.Metric.MaxMetricsHistroy {
-		newArray = newArray[1:]
-	}
-	*metricArray = newArray
-}
-
-// initializeFirstTimeMetrics initializes metrics for the first time collection
-func initializeFirstTimeMetrics(metric *SessionMetric, timestamp int64,
-	ipv4Import, ipv4Export, ipv6Import, ipv6Export int64, mpBGP bool) {
-
-	// Initialize traffic metric with a single data point
-	metric.Interface.Traffic.Metric = [][3]int64{{
-		timestamp,
-		metric.Interface.Traffic.Current[0],
-		metric.Interface.Traffic.Current[1],
-	}}
-
-	// Initialize RTT metric with a single data point(-1: timeout for initial)
-	rttValue := -1
-	metric.RTT.Current = rttValue
-	metric.RTT.Metric = [][2]int{{int(timestamp), rttValue}}
-	// Initialize route metrics
-	if mpBGP {
-		// For MP-BGP (single session)
-		if len(metric.BGP) > 0 {
-			metric.BGP[0].Routes.IPv4.Imported.Metric = [][2]int64{{timestamp, int64(ipv4Import)}}
-			metric.BGP[0].Routes.IPv4.Exported.Metric = [][2]int64{{timestamp, int64(ipv4Export)}}
-			metric.BGP[0].Routes.IPv6.Imported.Metric = [][2]int64{{timestamp, int64(ipv6Import)}}
-			metric.BGP[0].Routes.IPv6.Exported.Metric = [][2]int64{{timestamp, int64(ipv6Export)}}
-		}
-	} else {
-		// For traditional BGP - find metrics by type instead of using indices
-		for i := range metric.BGP {
-			switch metric.BGP[i].Type {
-			case BGP_SESSION_TYPE_IPV4:
-				// Initialize IPv4 metrics
-				metric.BGP[i].Routes.IPv4.Imported.Metric = [][2]int64{{timestamp, int64(ipv4Import)}}
-				metric.BGP[i].Routes.IPv4.Exported.Metric = [][2]int64{{timestamp, int64(ipv4Export)}}
-			case BGP_SESSION_TYPE_IPV6:
-				// Initialize IPv6 metrics
-				metric.BGP[i].Routes.IPv6.Imported.Metric = [][2]int64{{timestamp, int64(ipv6Import)}}
-				metric.BGP[i].Routes.IPv6.Exported.Metric = [][2]int64{{timestamp, int64(ipv6Export)}}
-			}
-		}
 	}
 }
 
@@ -648,14 +422,13 @@ func measureRTT(sessionUUID, ipv4, ipv6, ipv6ll string) int {
 		// Default order: IPv6 link-local first (usually faster), then IPv6, then IPv4
 		attemptOrder = []string{"ipv6ll", "ipv6", "ipv4"}
 	}
-
 	// Try protocols in determined order
 	for _, proto := range attemptOrder {
 		var rtt int
 		switch proto {
 		case "ipv6ll":
 			if ipv6ll != "" {
-				rtt = pingRTT(fmt.Sprintf("[%s]", ipv6ll))
+				rtt = pingRTT(ipv6ll)
 				if rtt != -1 {
 					updateRTTTracker(sessionUUID, "ipv6ll", rtt)
 					return rtt
@@ -663,7 +436,7 @@ func measureRTT(sessionUUID, ipv4, ipv6, ipv6ll string) int {
 			}
 		case "ipv6":
 			if ipv6 != "" {
-				rtt = pingRTT(fmt.Sprintf("[%s]", ipv6))
+				rtt = pingRTT(ipv6)
 				if rtt != -1 {
 					updateRTTTracker(sessionUUID, "ipv6", rtt)
 					return rtt
@@ -692,21 +465,50 @@ func updateRTTTracker(sessionUUID, preferredProtocol string, rtt int) {
 
 	tracker, exists := rttTrackers[sessionUUID]
 	if !exists {
-		tracker = &RTTTracker{LastRTT: -1} // Initialize LastRTT with -1
+		tracker = &RTTTracker{LastRTT: -1, Metric: make([]int, 0)} // Initialize LastRTT with -1 and empty Metric slice
 		rttTrackers[sessionUUID] = tracker
 	}
+
+	tracker.LastRTT = rtt
 
 	if preferredProtocol != "" {
 		// which means we have a successful ping
 		tracker.PreferredProtocol = preferredProtocol
-		tracker.LastRTT = rtt
 	}
+
+	// Record the current LastRTT to the metric array
+	tracker.Metric = append(tracker.Metric, tracker.LastRTT)
+	// Maintain maxMetricsHistory limit - drop oldest entries if exceeded
+	if len(tracker.Metric) > cfg.Metric.MaxRTTMetricsHistroy {
+		// Remove oldest entries to maintain the limit
+		tracker.Metric = tracker.Metric[1:]
+	}
+
+	// Calculate average loss rate based on RTT measurements
+	tracker.MetricAvgLoss = calculateAvgLossRate(tracker.Metric)
+}
+
+// calculateAvgLossRate calculates the average packet loss rate from RTT measurements
+// Returns a value between 0.0 (no loss) and 1.0 (100% loss)
+func calculateAvgLossRate(metrics []int) float64 {
+	if len(metrics) == 0 {
+		return 0.0
+	}
+
+	failedCount := 0
+	for _, rtt := range metrics {
+		if rtt == -1 {
+			failedCount++
+		}
+	}
+
+	return float64(failedCount) / float64(len(metrics))
 }
 
 // Map to cache recently failed ping attempts to reduce timeout for known bad IPs
 var failedPingCache = make(map[string]time.Time)
 
-// Actual implementation of ping RTT measurement using tcping
+// Actual implementation of ping RTT measurement using ICMP ping
 func pingRTT(ip string) int {
 	// Track recently failed destinations to use shorter timeouts
 	rttMutex.RLock()
@@ -721,9 +523,8 @@ func pingRTT(ip string) int {
 		pingCount = cfg.Metric.PingCountOnFail // Just do PingCountOnFail attempts for recently failed destinations
 	}
 
-	// Try port 179 (standard BGP port)
-	addr := fmt.Sprintf("%s:179", ip)
-	rtt := tcpingAverage(addr, pingCount, timeout)
+	// Use ICMP ping instead of TCP ping
+	rtt := icmpPingAverage(ip, pingCount, timeout)
 
 	// Update the failed IP cache
 	rttMutex.Lock()

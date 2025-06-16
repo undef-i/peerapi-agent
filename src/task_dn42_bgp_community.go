@@ -26,6 +26,42 @@ import (
 // (64511, 9) :: latency > 2981ms
 // (64511, x) :: latency ∈ [exp(x-1), exp(x)] ms (for x < 10)
 
+// calculateEffectiveRTT calculates an effective RTT value from the metric array
+// considering loss penalty and historical measurements
+func calculateEffectiveRTT(tracker *RTTTracker) int {
+	if len(tracker.Metric) == 0 {
+		return tracker.LastRTT
+	}
+
+	// Calculate average RTT from successful measurements only
+	var validRTTs []int
+	for _, rtt := range tracker.Metric {
+		if rtt > 0 { // Only include successful pings (positive RTT values)
+			validRTTs = append(validRTTs, rtt)
+		}
+	}
+
+	if len(validRTTs) == 0 {
+		return -1 // No successful measurements
+	}
+
+	// Calculate average RTT from valid measurements
+	var sum int
+	for _, rtt := range validRTTs {
+		sum += rtt
+	}
+	avgRTT := float64(sum) / float64(len(validRTTs))
+
+	// Apply loss penalty: increase effective RTT based on packet loss rate
+	// Loss penalty formula: effective_RTT = avg_RTT * (1 + loss_rate * penalty_factor)
+	// Higher loss rates result in higher effective RTT values
+	lossPenaltyFactor := 2.0 // Adjustable penalty factor
+	lossRate := tracker.MetricAvgLoss
+	effectiveRTT := avgRTT * (1.0 + lossRate*lossPenaltyFactor)
+
+	return int(effectiveRTT)
+}
+
 // getLatencyCommunityValue calculates the appropriate latency community value
 // based on the RTT in milliseconds
 func getLatencyCommunityValue(rtt int) int {
@@ -84,38 +120,45 @@ func updateFilterParams() {
 		return
 	}
 
-	// Get the latest RTT values for all sessions
-	metricMutex.RLock()
-	rttValues := make(map[string]int)
-	for uuid, metric := range localMetrics {
-		rttValues[uuid] = metric.RTT.Current
+	// Calculate effective RTT values for all sessions using RTTTracker.Metric array
+	rttMutex.RLock()
+	effectiveRTTValues := make(map[string]int)
+	for uuid, tracker := range rttTrackers {
+		effectiveRTTValues[uuid] = calculateEffectiveRTT(tracker)
 	}
-	metricMutex.RUnlock()
+	rttMutex.RUnlock()
 
 	// Update each session's BIRD configuration
 	updatedCount := 0
 	failedCount := 0
 
 	for _, session := range sessions {
-		// Get the RTT value for this session
-		rtt, exists := rttValues[session.UUID]
+		// Get the effective RTT value for this session from the tracker
+		rtt, exists := effectiveRTTValues[session.UUID]
 		if !exists {
-			rtt = -1 // Default to -1 if no RTT value exists
-			// If no RTT value exists, use the most recent measurement from the tracker
-			rttMutex.RLock()
-			tracker, trackerExists := rttTrackers[session.UUID]
-			if trackerExists {
-				rtt = tracker.LastRTT
+			// Fallback to current metric if no tracker exists
+			metricMutex.RLock()
+			if metric, metricExists := localMetrics[session.UUID]; metricExists {
+				rtt = metric.RTT.Current
+			} else {
+				rtt = -1 // Default to -1 if no RTT data exists
 			}
-			rttMutex.RUnlock()
+			metricMutex.RUnlock()
 		}
 
 		// Calculate the latency community value
 		latencyCommunityValue := getLatencyCommunityValue(rtt)
 
-		// Log RTT value and corresponding community
-		// log.Printf("[DN42BGPCommunity] Session %s has RTT %d ms, mapped to community value %d",
-		//	session.UUID, rtt, latencyCommunityValue)
+		// Log effective RTT value, loss rate, and corresponding community for debugging
+		// rttMutex.RLock()
+		// if tracker, trackerExists := rttTrackers[session.UUID]; trackerExists {
+		// 	log.Printf("[DN42BGPCommunity] Session %s: effective RTT %d ms (loss rate: %.2f%%), mapped to community value %d",
+		// 		session.UUID, rtt, tracker.MetricAvgLoss*100, latencyCommunityValue)
+		// } else {
+		// 	log.Printf("[DN42BGPCommunity] Session %s: RTT %d ms (no tracker), mapped to community value %d",
+		// 		session.UUID, rtt, latencyCommunityValue)
+		// }
+		// rttMutex.RUnlock()
 
 		// Get bandwidth and security community values based on session type
 		ifBwCommunity, ifSecCommunity := getCommunityValues(session.Type)

@@ -91,8 +91,7 @@ type RouteMetricStruct struct {
 }
 
 type RouteMetrics struct {
-	Current int        `json:"current"`
-	Metric  [][2]int64 `json:"metric"` // each metric is a pair [timestamp, value]
+	Current int `json:"current"`
 }
 
 type InterfaceMetric struct {
@@ -106,18 +105,19 @@ type InterfaceMetric struct {
 }
 
 type InterfaceTrafficMetric struct {
-	Total   []int64    `json:"total"`   // [Tx, Rx]
-	Current []int64    `json:"current"` // [Tx, Rx]
-	Metric  [][3]int64 `json:"metric"`  // each metric is a pair [timestamp, Tx, Rx]
+	Total   []int64 `json:"total"`   // [Tx, Rx]
+	Current []int64 `json:"current"` // [Tx, Rx]
 }
 
 type RTT struct {
-	Current int      `json:"current"`
-	Metric  [][2]int `json:"metric"` // each metric is a pair [timestamp, value]
+	Current int     `json:"current"`
+	Loss    float64 `json:"loss"` // Average packet loss rate (0.0 = no loss, 1.0 = 100% loss)
 }
 
 // RTTTracker holds information about the best protocol to use for RTT measurements
 type RTTTracker struct {
-	PreferredProtocol string // "ipv4", "ipv6", or "ipv6ll"
-	LastRTT           int    // Last measured RTT value
+	PreferredProtocol string  // "ipv4", "ipv6", or "ipv6ll"
+	LastRTT           int     // Last measured RTT value
+	Metric            []int   // RTT records(each time LastRTT is archived here)
+	MetricAvgLoss     float64 // Average loss rate of RTT measurements
 }

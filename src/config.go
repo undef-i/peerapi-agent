@@ -87,7 +87,7 @@ type metricConfig struct {
 	PingCountOnFail               int      `json:"pingCountOnFail"`               // If ping fails, retry with only pingCountOnFail times to avoid blocking the system
 	PingWorkerCount               int      `json:"pingWorkerCount"`               // Number of workers for parallel pinging, don't create too many or we might overwhelm the system
 	SessionWorkerCount            int      `json:"sessionWorkerCount"`            // Number of workers for parallel session metric collection (default: 8)
-	MaxMetricsHistroy             int      `json:"maxMetricsHistroy"`             // Maximum number of historical metrics to keep for each metric type of each session
+	MaxRTTMetricsHistroy          int      `json:"maxRTTMetricsHistroy"`          // Maximum number of RTT historical metrics to keep for each metric type of each session, used for calculating average RTT / Loss rate and bgp latency community
 	GeoCheckInterval              int      `json:"geoCheckInterval"`              // Interval for geo check task in seconds
 	BGPCommunityUpdateInterval    int      `json:"bgpCommunityUpdateInterval"`    // Interval for DN42 BGP community update task in seconds
 }

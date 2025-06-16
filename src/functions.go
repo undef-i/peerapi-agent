@@ -13,6 +13,7 @@ import (
 
 	"slices"
 
+	"github.com/go-ping/ping"
 	"github.com/matishsiao/goInfo"
 	"github.com/oschwald/geoip2-golang"
 )
@@ -193,27 +194,34 @@ func interfaceExists(iface string) (exist bool, err error) {
 	return false, nil
 }
 
-func tcping(address string, timeout time.Duration) int {
-	start := time.Now()
-	conn, err := net.DialTimeout("tcp", address, timeout)
+func icmpPingAverage(address string, tries, timeoutSeconds int) int {
+	// Create pinger
+	pinger, err := ping.NewPinger(address)
 	if err != nil {
 		return -1
 	}
-	conn.Close()
-	return int(time.Since(start).Milliseconds())
-}
 
-func tcpingAverage(address string, tries, timeoutSeconds int) int {
-	var total int
-	for range tries {
-		delay := tcping(address, time.Duration(timeoutSeconds)*time.Second)
-		if delay == -1 {
-			return -1
-		}
-		total += delay
-		time.Sleep(1 * time.Second)
+	// Needs root privileges for ICMP or NET capabilities
+	pinger.SetPrivileged(true)
+
+	// Configure ping parameters
+	pinger.Count = tries
+	pinger.Timeout = time.Duration(timeoutSeconds) * time.Second
+	pinger.Interval = time.Second // 1 second interval
+
+	// Run the ping
+	err = pinger.Run()
+	if err != nil {
+		return -1
 	}
-	return total / tries
+
+	stats := pinger.Statistics()
+	if stats.PacketsRecv == 0 {
+		return -1
+	}
+
+	// Use built-in average calculation from go-ping
+	return int(stats.AvgRtt.Milliseconds())
 }
 
 // Parse input string (with or without port) and extract IP/hostname
