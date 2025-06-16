@@ -357,8 +357,8 @@ func generateSessionMetric(session BgpSession, timestamp int64, bgpMetrics []BGP
 		rttValue = tracker.LastRTT
 		lossRate = tracker.MetricAvgLoss
 	} else {
-		rttValue = -1 // Default to -1 if no tracker exists
-		lossRate = 0.0
+		rttValue = -1  // Default to -1 if no tracker exists
+		lossRate = 1.0 // Default to 100% loss if no tracker exists
 	}
 	rttMutex.Unlock()
 
@@ -465,7 +465,11 @@ func updateRTTTracker(sessionUUID, preferredProtocol string, rtt int) {
 
 	tracker, exists := rttTrackers[sessionUUID]
 	if !exists {
-		tracker = &RTTTracker{LastRTT: -1, Metric: make([]int, 0)} // Initialize LastRTT with -1 and empty Metric slice
+		tracker = &RTTTracker{
+			LastRTT:       -1,
+			Metric:        make([]int, 0),
+			MetricAvgLoss: 1.0,
+		}
 		rttTrackers[sessionUUID] = tracker
 	}
 
