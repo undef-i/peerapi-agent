@@ -194,11 +194,11 @@ func interfaceExists(iface string) (exist bool, err error) {
 	return false, nil
 }
 
-func icmpPingAverage(address string, tries, timeoutSeconds int) int {
-	// Create pinger
+func icmpPingAverage(address string, tries, timeoutSeconds int) (int, float64) {
+	// Create pinger for the specific address
 	pinger, err := ping.NewPinger(address)
 	if err != nil {
-		return -1
+		return -1, 1.0
 	}
 
 	// Needs root privileges for ICMP or NET capabilities
@@ -207,21 +207,28 @@ func icmpPingAverage(address string, tries, timeoutSeconds int) int {
 	// Configure ping parameters
 	pinger.Count = tries
 	pinger.Timeout = time.Duration(timeoutSeconds) * time.Second
-	pinger.Interval = time.Second // 1 second interval
+
+	// Use shorter interval for faster measurements when doing fewer tries
+	// This reduces the total time per measurement while maintaining accuracy
+	if tries <= 3 {
+		pinger.Interval = 200 * time.Millisecond // 200ms for quick measurements
+	} else {
+		pinger.Interval = 500 * time.Millisecond // 500ms for comprehensive measurements
+	}
 
 	// Run the ping
 	err = pinger.Run()
 	if err != nil {
-		return -1
+		return -1, 1.0
 	}
 
 	stats := pinger.Statistics()
 	if stats.PacketsRecv == 0 {
-		return -1
+		return -1, 1.0
 	}
 
 	// Use built-in average calculation from go-ping
-	return int(stats.AvgRtt.Milliseconds())
+	return int(stats.AvgRtt.Milliseconds()), stats.PacketLoss
 }
 
 // Parse input string (with or without port) and extract IP/hostname

@@ -56,7 +56,7 @@ func calculateEffectiveRTT(tracker *RTTTracker) int {
 	// Loss penalty formula: effective_RTT = avg_RTT * (1 + loss_rate * penalty_factor)
 	// Higher loss rates result in higher effective RTT values
 	lossPenaltyFactor := 2.0 // Adjustable penalty factor
-	lossRate := tracker.MetricAvgLoss
+	lossRate := tracker.AvgLoss
 	effectiveRTT := avgRTT * (1.0 + lossRate*lossPenaltyFactor)
 
 	return int(effectiveRTT)
@@ -153,7 +153,7 @@ func updateFilterParams() {
 		// rttMutex.RLock()
 		// if tracker, trackerExists := rttTrackers[session.UUID]; trackerExists {
 		// 	log.Printf("[DN42BGPCommunity] Session %s: effective RTT %d ms (loss rate: %.2f%%), mapped to community value %d",
-		// 		session.UUID, rtt, tracker.MetricAvgLoss*100, latencyCommunityValue)
+		// 		session.UUID, rtt, tracker.AvgLoss*100, latencyCommunityValue)
 		// } else {
 		// 	log.Printf("[DN42BGPCommunity] Session %s: RTT %d ms (no tracker), mapped to community value %d",
 		// 		session.UUID, rtt, latencyCommunityValue)

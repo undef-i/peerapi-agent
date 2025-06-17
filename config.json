@@ -36,7 +36,7 @@
   "bird": {
     "controlSocket": "/var/run/bird/bird.ctl",
     "poolSize": 5,
-    "poolSizeMax": 128,
+    "poolSizeMax": 64,
     "bgpPeerConfDir": "/etc/bird/peers",
     "bgpPeerConfTemplateFile": "./templates/peer.conf",
     "ipCommandPath": "/usr/sbin/ip"
@@ -51,7 +51,7 @@
     "pingTimeout": 5,
     "pingCount": 4,
     "pingCountOnFail": 1,
-    "pingWorkerCount": 64,
+    "pingWorkerCount": 16,
     "sessionWorkerCount": 64,
     "maxRTTMetricsHistroy": 288,
     "geoCheckInterval": 900,

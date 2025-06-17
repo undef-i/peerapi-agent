@@ -116,8 +116,10 @@ type RTT struct {
 
 // RTTTracker holds information about the best protocol to use for RTT measurements
 type RTTTracker struct {
-	PreferredProtocol string  // "ipv4", "ipv6", or "ipv6ll"
-	LastRTT           int     // Last measured RTT value
-	Metric            []int   // RTT records(each time LastRTT is archived here)
-	MetricAvgLoss     float64 // Average loss rate of RTT measurements
+	PreferredProtocol string    // "ipv4", "ipv6", or "ipv6ll"
+	LastRTT           int       // Last measured RTT value
+	LastLoss          float64   // Last measured packet loss rate
+	Metric            []int     // RTT records(each time LastRTT is archived here)
+	LossMetric        []float64 // Packet loss records (each time LastRTT is archived here)
+	AvgLoss           float64   // Average loss rate of RTT measurements
 }

@@ -355,7 +355,7 @@ func generateSessionMetric(session BgpSession, timestamp int64, bgpMetrics []BGP
 	if exists {
 		// Use the cached RTT value if recent enough
 		rttValue = tracker.LastRTT
-		lossRate = tracker.MetricAvgLoss
+		lossRate = tracker.AvgLoss
 	} else {
 		rttValue = -1  // Default to -1 if no tracker exists
 		lossRate = 1.0 // Default to 100% loss if no tracker exists
@@ -409,71 +409,78 @@ func measureRTT(sessionUUID, ipv4, ipv6, ipv6ll string) int {
 	var attemptOrder []string
 
 	if exists && tracker.PreferredProtocol != "" {
-		// Try the previously successful protocol first
+		// If we have a recently successful protocol, try it first
+		// Only fall back to other protocols if it fails
 		attemptOrder = []string{tracker.PreferredProtocol}
 
-		// Then add the other protocols
-		for _, proto := range []string{"ipv6ll", "ipv6", "ipv4"} {
-			if proto != tracker.PreferredProtocol {
-				attemptOrder = append(attemptOrder, proto)
+		// Only add fallback protocols if the preferred one has been failing recently
+		if tracker.LastRTT == -1 {
+			// Add other protocols as fallbacks
+			for _, proto := range []string{"ipv6ll", "ipv6", "ipv4"} {
+				if proto != tracker.PreferredProtocol {
+					attemptOrder = append(attemptOrder, proto)
+				}
 			}
 		}
 	} else {
-		// Default order: IPv6 link-local first (usually faster), then IPv6, then IPv4
+		// Default order: IPv6 link-local first (usually fastest), then IPv6, then IPv4
 		attemptOrder = []string{"ipv6ll", "ipv6", "ipv4"}
 	}
+
 	// Try protocols in determined order
 	for _, proto := range attemptOrder {
-		var rtt int
 		switch proto {
 		case "ipv6ll":
 			if ipv6ll != "" {
-				rtt = pingRTT(ipv6ll)
+				rtt, loss := pingRTT(ipv6ll)
 				if rtt != -1 {
-					updateRTTTracker(sessionUUID, "ipv6ll", rtt)
+					updateRTTTracker(sessionUUID, "ipv6ll", rtt, loss)
 					return rtt
 				}
 			}
 		case "ipv6":
 			if ipv6 != "" {
-				rtt = pingRTT(ipv6)
+				rtt, loss := pingRTT(ipv6)
 				if rtt != -1 {
-					updateRTTTracker(sessionUUID, "ipv6", rtt)
+					updateRTTTracker(sessionUUID, "ipv6", rtt, loss)
 					return rtt
 				}
 			}
 		case "ipv4":
 			if ipv4 != "" {
-				rtt = pingRTT(ipv4)
+				rtt, loss := pingRTT(ipv4)
 				if rtt != -1 {
-					updateRTTTracker(sessionUUID, "ipv4", rtt)
+					updateRTTTracker(sessionUUID, "ipv4", rtt, loss)
 					return rtt
 				}
 			}
 		}
 	}
 
-	// If all attempts fail, update tracker with failure and return 0
-	updateRTTTracker(sessionUUID, "", -1)
+	// If all attempts fail, update tracker with failure and return -1
+	updateRTTTracker(sessionUUID, "", -1, 1.0)
 	return -1
 }
 
 // updateRTTTracker updates the RTT tracking information for a session
-func updateRTTTracker(sessionUUID, preferredProtocol string, rtt int) {
+func updateRTTTracker(sessionUUID, preferredProtocol string, rtt int, loss float64) {
 	rttMutex.Lock()
 	defer rttMutex.Unlock()
 
 	tracker, exists := rttTrackers[sessionUUID]
 	if !exists {
 		tracker = &RTTTracker{
-			LastRTT:       -1,
-			Metric:        make([]int, 0),
-			MetricAvgLoss: 1.0,
+			LastRTT:    -1,
+			LastLoss:   1.0,
+			Metric:     make([]int, 0),
+			LossMetric: make([]float64, 0),
+			AvgLoss:    1.0,
 		}
 		rttTrackers[sessionUUID] = tracker
 	}
 
 	tracker.LastRTT = rtt
+	tracker.LastLoss = loss
 
 	if preferredProtocol != "" {
 		// which means we have a successful ping
@@ -488,32 +495,38 @@ func updateRTTTracker(sessionUUID, preferredProtocol string, rtt int) {
 		tracker.Metric = tracker.Metric[1:]
 	}
 
+	// Record the current loss to the loss metric array
+	tracker.LossMetric = append(tracker.LossMetric, tracker.LastLoss)
+	// Maintain maxMetricsHistory limit - drop oldest entries if exceeded
+	if len(tracker.LossMetric) > cfg.Metric.MaxRTTMetricsHistroy {
+		// Remove oldest entries to maintain the limit
+		tracker.LossMetric = tracker.LossMetric[1:]
+	}
+
 	// Calculate average loss rate based on RTT measurements
-	tracker.MetricAvgLoss = calculateAvgLossRate(tracker.Metric)
+	tracker.AvgLoss = calculateAvgLossRate(tracker.LossMetric)
 }
 
 // calculateAvgLossRate calculates the average packet loss rate from RTT measurements
 // Returns a value between 0.0 (no loss) and 1.0 (100% loss)
-func calculateAvgLossRate(metrics []int) float64 {
+func calculateAvgLossRate(metrics []float64) float64 {
 	if len(metrics) == 0 {
 		return 0.0
 	}
 
-	failedCount := 0
-	for _, rtt := range metrics {
-		if rtt == -1 {
-			failedCount++
-		}
+	var totalLoss float64
+	for _, loss := range metrics {
+		totalLoss += loss
 	}
 
-	return float64(failedCount) / float64(len(metrics))
+	return totalLoss / float64(len(metrics))
 }
 
 // Map to cache recently failed ping attempts to reduce timeout for known bad IPs
 var failedPingCache = make(map[string]time.Time)
 
 // Actual implementation of ping RTT measurement using ICMP ping
-func pingRTT(ip string) int {
+func pingRTT(ip string) (int, float64) {
 	// Track recently failed destinations to use shorter timeouts
 	rttMutex.RLock()
 	lastKnownFailedIP, exists := failedPingCache[ip]
@@ -528,7 +541,7 @@ func pingRTT(ip string) int {
 	}
 
 	// Use ICMP ping instead of TCP ping
-	rtt := icmpPingAverage(ip, pingCount, timeout)
+	rtt, loss := icmpPingAverage(ip, pingCount, timeout)
 
 	// Update the failed IP cache
 	rttMutex.Lock()
@@ -542,7 +555,7 @@ func pingRTT(ip string) int {
 	rttMutex.Unlock()
 
 	// log.Printf("[Metrics] Ping RTT for %s: %d ms (timeout: %d s, count: %d)\n", ip, rtt, timeout, pingCount)
-	return rtt
+	return rtt, loss
 }
 
 // batchMeasureRTT processes multiple RTT measurements in parallel with context cancellation support
@@ -564,16 +577,58 @@ func batchMeasureRTT(ctx context.Context) {
 	log.Printf("[Metrics] Starting batch RTT measurement for %d sessions", len(sessions))
 	startTime := time.Now()
 
+	// Process sessions in smaller batches to prevent overwhelming the network
+	batchSize := cfg.Metric.PingWorkerCount
+	totalBatches := (len(sessions) + batchSize - 1) / batchSize
+
+	for batchNum := range totalBatches {
+		start := batchNum * batchSize
+		end := min(start+batchSize, len(sessions))
+		batchSessions := sessions[start:end]
+
+		// Process this batch
+		processBatchRTT(ctx, batchSessions)
+
+		// Add a small delay between batches to prevent network saturation
+		if batchNum < totalBatches-1 {
+			select {
+			case <-time.After(100 * time.Millisecond):
+			case <-ctx.Done():
+				log.Printf("[Metrics] Batch RTT measurement cancelled at batch %d/%d", batchNum+1, totalBatches)
+				return
+			}
+		}
+	}
+
+	duration := time.Since(startTime)
+	log.Printf("[Metrics] Completed batch RTT measurement for %d sessions in %d batches using up to %d workers in %v",
+		len(sessions), totalBatches, cfg.Metric.PingWorkerCount, duration)
+}
+
+// processBatchRTT processes a single batch of RTT measurements
+func processBatchRTT(ctx context.Context, sessions []BgpSession) {
+	if len(sessions) == 0 {
+		return
+	}
+
 	// Create a worker pool with a reasonable number of workers
 	workerCount := min(len(sessions), cfg.Metric.PingWorkerCount)
 
 	// Create channels for work distribution
 	jobs := make(chan BgpSession, len(sessions))
-	results := make(chan struct{}, len(sessions))
-
-	// Start worker goroutines
+	results := make(chan struct{}, len(sessions)) // Start worker goroutines with staggered startup
 	for w := 1; w <= workerCount; w++ {
-		go rttWorker(ctx, jobs, results)
+		// Stagger worker startup to reduce initial burst
+		go func(workerID int) {
+			// Small initial delay based on worker ID to spread load
+			initialDelay := time.Duration(workerID-1) * 25 * time.Millisecond
+			select {
+			case <-time.After(initialDelay):
+			case <-ctx.Done():
+				return
+			}
+			rttWorker(ctx, jobs, results, workerID)
+		}(w)
 	}
 
 	// Send sessions to be processed
@@ -582,12 +637,10 @@ func batchMeasureRTT(ctx context.Context) {
 		case jobs <- session:
 		case <-ctx.Done():
 			close(jobs)
-			log.Printf("[Metrics] Batch RTT measurement cancelled")
 			return
 		}
 	}
 	close(jobs)
-
 	// Wait for all jobs to complete or context cancellation
 	completedJobs := 0
 	for completedJobs < len(sessions) {
@@ -595,17 +648,13 @@ func batchMeasureRTT(ctx context.Context) {
 		case <-results:
 			completedJobs++
 		case <-ctx.Done():
-			log.Printf("[Metrics] Batch RTT measurement cancelled after %d/%d jobs", completedJobs, len(sessions))
 			return
 		}
 	}
-
-	duration := time.Since(startTime)
-	log.Printf("[Metrics] Completed batch RTT measurement for %d sessions using %d workers in %v", len(sessions), workerCount, duration)
 }
 
 // rttWorker is a worker goroutine that processes RTT measurements with context cancellation support
-func rttWorker(ctx context.Context, jobs <-chan BgpSession, results chan<- struct{}) {
+func rttWorker(ctx context.Context, jobs <-chan BgpSession, results chan<- struct{}, workerID int) {
 	for {
 		select {
 		case session, ok := <-jobs:
@@ -632,6 +681,15 @@ func rttWorker(ctx context.Context, jobs <-chan BgpSession, results chan<- struc
 				session.IPv6,
 				ipv6LinkLocal,
 			)
+
+			// Adaptive delay based on worker ID to spread network load
+			// Workers with higher IDs get slightly longer delays to prevent bursts
+			adaptiveDelay := time.Duration(25+(workerID-1)*5) * time.Millisecond
+			select {
+			case <-time.After(adaptiveDelay):
+			case <-ctx.Done():
+				return
+			}
 
 			// Signal that this job is done
 			select {
