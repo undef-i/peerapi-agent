@@ -2,9 +2,12 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -13,7 +16,6 @@ import (
 
 	"slices"
 
-	"github.com/go-ping/ping"
 	"github.com/matishsiao/goInfo"
 	"github.com/oschwald/geoip2-golang"
 )
@@ -195,40 +197,106 @@ func interfaceExists(iface string) (exist bool, err error) {
 }
 
 func icmpPingAverage(address string, tries, timeoutSeconds int) (int, float64) {
-	// Create pinger for the specific address
-	pinger, err := ping.NewPinger(address)
+	// Use system native ping command
+	rtt, loss, err := systemPing(address, tries, timeoutSeconds)
 	if err != nil {
 		return -1, 1.0
 	}
+	return rtt, loss
+}
 
-	// Needs root privileges for ICMP or NET capabilities
-	pinger.SetPrivileged(true)
+// systemPing executes the system(Linux iputils-ping) native ping command and parses the result
+func systemPing(address string, count, timeoutSeconds int) (int, float64, error) {
+	// Determine if we're dealing with IPv6
+	isIPv6 := strings.Contains(address, ":") || strings.Contains(address, "%")
 
-	// Configure ping parameters
-	pinger.Count = tries
-	pinger.Timeout = time.Duration(timeoutSeconds) * time.Second
-
-	// Use shorter interval for faster measurements when doing fewer tries
-	// This reduces the total time per measurement while maintaining accuracy
-	if tries <= 3 {
-		pinger.Interval = 200 * time.Millisecond // 200ms for quick measurements
+	// Build ping command arguments
+	var args []string
+	if isIPv6 {
+		args = append(args, "-6") // Force IPv6
 	} else {
-		pinger.Interval = 500 * time.Millisecond // 500ms for comprehensive measurements
+		args = append(args, "-4") // Force IPv4
 	}
 
-	// Run the ping
-	err = pinger.Run()
+	// Add common arguments
+	args = append(args, "-c", strconv.Itoa(count))                  // packet count
+	args = append(args, "-w", strconv.Itoa(timeoutSeconds*count+1)) // deadline in seconds(with 1 second buffer)
+	args = append(args, "-W", strconv.Itoa(timeoutSeconds))         // timeout per packet
+	args = append(args, "-i", "0.2")                                // interval between packets (200ms)
+	args = append(args, "-q")                                       // quiet mode (only summary)
+	args = append(args, address)                                    // target address
+
+	// Create context with timeout (add 5 seconds buffer to deadline)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutSeconds*count+5)*time.Second)
+	defer cancel()
+
+	// Execute ping command
+	cmd := exec.CommandContext(ctx, "ping", args...)
+
+	// Capture both stdout and stderr
+	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return -1, 1.0
+		// Check if it's a timeout or context cancellation
+		if ctx.Err() == context.DeadlineExceeded {
+			return -1, 1.0, fmt.Errorf("ping timeout")
+		}
+		// For other errors (host unreachable, etc.), try to parse what we can
+		if len(output) > 0 {
+			return parsePingOutput(string(output))
+		}
+		return -1, 1.0, fmt.Errorf("ping failed: %w", err)
 	}
 
-	stats := pinger.Statistics()
-	if stats.PacketsRecv == 0 {
-		return -1, 1.0
+	return parsePingOutput(string(output))
+}
+
+// parsePingOutput parses the output from the ping command
+func parsePingOutput(output string) (int, float64, error) {
+	// Example output:
+	// PING 172.23.91.1 (172.23.91.1) 56(84) bytes of data.
+	//
+	// --- 172.23.91.1 ping statistics ---
+	// 4 packets transmitted, 4 received, 0% packet loss, time 3081ms
+	// rtt min/avg/max/mdev = 0.392/0.426/0.503/0.044 ms
+
+	lines := strings.Split(output, "\n")
+
+	var packetLoss float64 = 1.0 // Default to 100% loss
+	var avgRTT int = -1          // Default to -1 (no RTT)
+
+	// Parse packet loss from statistics line
+	packetLossRegex := regexp.MustCompile(`(\d+)% packet loss`)
+	rttRegex := regexp.MustCompile(`rtt min/avg/max/mdev = ([\d.]+)/([\d.]+)/([\d.]+)/([\d.]+) ms`)
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+
+		// Parse packet loss
+		if matches := packetLossRegex.FindStringSubmatch(line); len(matches) > 1 {
+			if lossPercent, err := strconv.Atoi(matches[1]); err == nil {
+				packetLoss = float64(lossPercent) / 100.0
+			}
+		}
+
+		// Parse RTT statistics
+		if matches := rttRegex.FindStringSubmatch(line); len(matches) > 2 {
+			if avgFloat, err := strconv.ParseFloat(matches[2], 64); err == nil {
+				avgRTT = int(avgFloat) // Convert to milliseconds
+			}
+		}
 	}
 
-	// Use built-in average calculation from go-ping
-	return int(stats.AvgRtt.Milliseconds()), stats.PacketLoss
+	// If we got 100% packet loss, return -1 for RTT
+	if packetLoss >= 1.0 {
+		return -1, 1.0, nil
+	}
+
+	// If we couldn't parse RTT but had some successful packets, estimate from packet loss
+	if avgRTT == -1 && packetLoss < 1.0 {
+		return -1, packetLoss, fmt.Errorf("could not parse RTT from ping output")
+	}
+
+	return avgRTT, packetLoss, nil
 }
 
 // Parse input string (with or without port) and extract IP/hostname

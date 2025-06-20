@@ -5,7 +5,6 @@ go 1.24.4
 replace github.com/iedon/peerapi-agent/bird => ./bird
 
 require (
-	github.com/go-ping/ping v1.2.0
 	github.com/gofiber/fiber/v3 v3.0.0-beta.4
 	github.com/golang-jwt/jwt/v5 v5.2.2
 	github.com/matishsiao/goInfo v0.0.0-20241216093258-66a9250504d6
@@ -31,7 +30,6 @@ require (
 	github.com/valyala/tcplisten v1.0.0 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
 	golang.org/x/net v0.31.0 // indirect
-	golang.org/x/sync v0.10.0 // indirect
 	golang.org/x/sys v0.28.0 // indirect
 	golang.org/x/text v0.21.0 // indirect
 )

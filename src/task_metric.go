@@ -616,19 +616,9 @@ func processBatchRTT(ctx context.Context, sessions []BgpSession) {
 
 	// Create channels for work distribution
 	jobs := make(chan BgpSession, len(sessions))
-	results := make(chan struct{}, len(sessions)) // Start worker goroutines with staggered startup
+	results := make(chan struct{}, len(sessions))
 	for w := 1; w <= workerCount; w++ {
-		// Stagger worker startup to reduce initial burst
-		go func(workerID int) {
-			// Small initial delay based on worker ID to spread load
-			initialDelay := time.Duration(workerID-1) * 25 * time.Millisecond
-			select {
-			case <-time.After(initialDelay):
-			case <-ctx.Done():
-				return
-			}
-			rttWorker(ctx, jobs, results, workerID)
-		}(w)
+		go rttWorker(ctx, jobs, results)
 	}
 
 	// Send sessions to be processed
@@ -654,7 +644,7 @@ func processBatchRTT(ctx context.Context, sessions []BgpSession) {
 }
 
 // rttWorker is a worker goroutine that processes RTT measurements with context cancellation support
-func rttWorker(ctx context.Context, jobs <-chan BgpSession, results chan<- struct{}, workerID int) {
+func rttWorker(ctx context.Context, jobs <-chan BgpSession, results chan<- struct{}) {
 	for {
 		select {
 		case session, ok := <-jobs:
@@ -681,15 +671,6 @@ func rttWorker(ctx context.Context, jobs <-chan BgpSession, results chan<- struc
 				session.IPv6,
 				ipv6LinkLocal,
 			)
-
-			// Adaptive delay based on worker ID to spread network load
-			// Workers with higher IDs get slightly longer delays to prevent bursts
-			adaptiveDelay := time.Duration(25+(workerID-1)*5) * time.Millisecond
-			select {
-			case <-time.After(adaptiveDelay):
-			case <-ctx.Done():
-				return
-			}
 
 			// Signal that this job is done
 			select {
