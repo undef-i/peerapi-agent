@@ -233,7 +233,7 @@ func systemPing(address string, count, timeoutSeconds int) (int, float64, error)
 	defer cancel()
 
 	// Execute ping command
-	cmd := exec.CommandContext(ctx, "ping", args...)
+	cmd := exec.CommandContext(ctx, cfg.Metric.PingCommandPath, args...)
 
 	// Capture both stdout and stderr
 	output, err := cmd.CombinedOutput()
@@ -466,4 +466,103 @@ func getRandomUnusedPort(proto string) (int, error) {
 	}
 
 	return 0, fmt.Errorf("unable to find unused port after %d attempts", maxRetries)
+}
+
+// validateInterfaceIP checks if an IP address is allowed for interface assignment
+// Returns true if the IP is allowed, false if it should be blocked
+func validateInterfaceIP(ipAddr string) (bool, error) {
+	if ipAddr == "" {
+		return true, nil // Empty IP is allowed
+	}
+
+	ip := net.ParseIP(ipAddr)
+	if ip == nil {
+		return false, fmt.Errorf("invalid IP address: %s", ipAddr)
+	}
+
+	// Check if public IPs are allowed
+	if !cfg.PeerAPI.InterfaceIpAllowPublic {
+		// Check if it's a public IP
+		if isPublicIP(ip) {
+			return false, fmt.Errorf("public IP addresses are not allowed: %s", ipAddr)
+		}
+	}
+
+	// Check blacklist
+	for _, blacklistEntry := range cfg.PeerAPI.InterfaceIpBlacklist {
+		if isIPInCIDR(ipAddr, blacklistEntry) {
+			return false, fmt.Errorf("IP %s is in blacklist range: %s", ipAddr, blacklistEntry)
+		}
+	}
+
+	return true, nil
+}
+
+// isPublicIP checks if an IP address is in public IP ranges
+func isPublicIP(ip net.IP) bool {
+	// Define private IP ranges
+	privateRanges := []string{
+		"10.0.0.0/8",     // RFC1918
+		"172.16.0.0/12",  // RFC1918
+		"192.168.0.0/16", // RFC1918
+		"127.0.0.0/8",    // Loopback
+		"169.254.0.0/16", // Link-local
+		"224.0.0.0/4",    // Multicast
+		"::1/128",        // IPv6 loopback
+		"fe80::/10",      // IPv6 link-local
+		"fc00::/7",       // IPv6 unique local
+		"ff00::/8",       // IPv6 multicast
+	}
+
+	for _, cidr := range privateRanges {
+		_, network, err := net.ParseCIDR(cidr)
+		if err != nil {
+			continue
+		}
+		if network.Contains(ip) {
+			return false // It's private, not public
+		}
+	}
+
+	return true // It's public
+}
+
+// isIPInCIDR checks if an IP address is within a CIDR range
+func isIPInCIDR(ipAddr, cidr string) bool {
+	ip := net.ParseIP(ipAddr)
+	if ip == nil {
+		return false
+	}
+
+	// Handle single IP case (no CIDR notation)
+	if !strings.Contains(cidr, "/") {
+		blacklistIP := net.ParseIP(cidr)
+		if blacklistIP == nil {
+			return false
+		}
+		return ip.Equal(blacklistIP)
+	}
+
+	// Handle CIDR case
+	_, network, err := net.ParseCIDR(cidr)
+	if err != nil {
+		return false
+	}
+
+	return network.Contains(ip)
+}
+
+// extractHostFromEndpoint extracts the IP/hostname portion from an endpoint (removing port if present)
+func extractHostFromEndpoint(endpoint string) string {
+	if endpoint == "" {
+		return ""
+	}
+
+	// Try to split host and port
+	if host, _, err := net.SplitHostPort(endpoint); err == nil {
+		return host
+	}
+
+	// If no port present, return the endpoint as is
+	return endpoint
 }

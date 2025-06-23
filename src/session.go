@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"os/exec"
 	"path"
@@ -134,6 +135,9 @@ func configureWireguardInterface(ctx context.Context, session *BgpSession) error
 	}
 	if session.Endpoint != "" {
 		wgArgs = append(wgArgs, "endpoint", session.Endpoint)
+		if _, _, err := net.SplitHostPort(session.Endpoint); err != nil {
+			return fmt.Errorf("failed to parse wireguard endpoint \"%s\" : %v", session.Endpoint, err)
+		}
 	}
 
 	cmd = exec.CommandContext(ctx, cfg.WireGuard.WGCommandPath, wgArgs...)
@@ -235,7 +239,6 @@ func configureGreInterface(ctx context.Context, session *BgpSession) error {
 func configureIPAddresses(ctx context.Context, session *BgpSession) error {
 	// Get local IP configuration based on session type
 	var localIPv4, localIPv6, localIPv6LinkLocal string
-
 	switch session.Type {
 	case "wireguard":
 		localIPv4 = cfg.WireGuard.IPv4
@@ -251,6 +254,24 @@ func configureIPAddresses(ctx context.Context, session *BgpSession) error {
 		localIPv6 = cfg.WireGuard.IPv6
 		localIPv6LinkLocal = cfg.WireGuard.IPv6LinkLocal
 	}
+
+	// Validate all session IP addresses against security policies
+	ipAddresses := []struct {
+		ip   string
+		name string
+	}{
+		{session.IPv4, "IPv4"},
+		{session.IPv6, "IPv6"},
+		{session.IPv6LinkLocal, "IPv6 Link Local"},
+	}
+
+	for _, ipAddr := range ipAddresses {
+		if allowed, err := validateInterfaceIP(ipAddr.ip); !allowed {
+			teardownViolatingIPSession(session, fmt.Sprintf("%s address validation failed: %v", ipAddr.name, err))
+			return fmt.Errorf("session %s address %s validation failed: %v", ipAddr.name, ipAddr.ip, err)
+		}
+	}
+
 	// Configure IPv4 if provided
 	if session.IPv4 != "" {
 		cmd := exec.CommandContext(ctx, cfg.Bird.IPCommandPath, "addr", "add", "dev", session.Interface,
@@ -599,4 +620,15 @@ func deleteSession(session *BgpSession) error {
 	}
 
 	return nil
+}
+
+// teardownViolatingIPSession tears down a session that violates IP rules
+func teardownViolatingIPSession(session *BgpSession, reason string) {
+	log.Printf("[Session] IP Validation: <%s> Session violates IP rules (%s), tearing down", session.UUID, reason)
+
+	// Report teardown status to PeerAPI
+	err := reportNewStatusToCenter(session.UUID, PEERING_STATUS_TEARDOWN)
+	if err != nil {
+		log.Printf("<%s> Failed to report teardown status: %v", session.UUID, err)
+	}
 }

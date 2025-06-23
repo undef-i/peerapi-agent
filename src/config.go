@@ -29,6 +29,8 @@ type peerApiCenterConfig struct {
 	MetricInterval              int      `json:"metricInterval"`
 	WanInterfaces               []string `json:"wanInterfaces"` // List of WAN interfaces to monitor their traffic
 	SessionPassthroughJwtSecert string   `json:"sessionPassthroughJwtSecert"`
+	InterfaceIpAllowPublic      bool     `json:"interfaceIpAllowPublic"` // Whether to allow public IP addresses on interfaces
+	InterfaceIpBlacklist        []string `json:"interfaceIpBlacklist"`   // List of IP/CIDR ranges to blacklist from interface assignment
 }
 
 type birdConfig struct {
@@ -82,6 +84,7 @@ type metricConfig struct {
 	GeoIPCountryMode              string   `json:"geoIPCountryMode"`              // Mode for GeoIP country filtering (blacklist/whitelist)
 	BlacklistGeoCountries         []string `json:"blacklistGeoCountries"`         // List of countries to blacklist
 	WhitelistGeoCountries         []string `json:"whitelistGeoCountries"`         // List of countries to whitelist
+	PingCommandPath               string   `json:"pingCommandPath"`               // Path to the ping command
 	PingTimeout                   int      `json:"pingTimeout"`                   // Timeout for ping requests in seconds
 	PingCount                     int      `json:"pingCount"`                     // Number of ping attempts
 	PingCountOnFail               int      `json:"pingCountOnFail"`               // If ping fails, retry with only pingCountOnFail times to avoid blocking the system

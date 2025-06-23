@@ -10,13 +10,30 @@ import (
 	"time"
 )
 
+// removeDuplicateEndpoints removes duplicate endpoints from a slice while preserving order
+func removeDuplicateEndpoints(endpoints []string) []string {
+	if len(endpoints) <= 1 {
+		return endpoints
+	}
+
+	seen := make(map[string]bool)
+	result := make([]string, 0, len(endpoints))
+
+	for _, endpoint := range endpoints {
+		if !seen[endpoint] {
+			seen[endpoint] = true
+			result = append(result, endpoint)
+		}
+	}
+	return result
+}
+
 // checkSessionGeoLocation checks if a session's endpoint location is allowed
 // Returns true if the session should be torn down
 func checkSessionGeoLocation(session *BgpSession) bool {
 	// Skip checking if:
 	// - Auto teardown is not enabled
 	// - GeoIP database is not initialized
-	// - Session endpoint is empty
 	if !cfg.Metric.AutoTeardown || geoDB == nil {
 		return false
 	}
@@ -25,13 +42,18 @@ func checkSessionGeoLocation(session *BgpSession) bool {
 
 	// Always check the configured session endpoint if available
 	if session.Endpoint != "" {
-		endpointsToCheck = append(endpointsToCheck, session.Endpoint)
+		// Extract just the IP/hostname portion for geo checking
+		sessionHost := extractHostFromEndpoint(session.Endpoint)
+		if sessionHost != "" {
+			endpointsToCheck = append(endpointsToCheck, sessionHost)
+		}
 	}
 
-	// For WireGuard sessions, also check the actual WireGuard endpoint
+	// For WireGuard sessions, also check the actual WireGuard connected endpoint
 	if session.Type == "wireguard" && session.Interface != "" && session.Credential != "" {
 		wgEndpoint := getWireGuardEndpoint(session.Interface, session.Credential)
-		if wgEndpoint != "" && wgEndpoint != "(none)" && wgEndpoint != session.Endpoint {
+		if wgEndpoint != "" && wgEndpoint != "(none)" {
+			// WireGuard endpoint is already processed to be host-only
 			endpointsToCheck = append(endpointsToCheck, wgEndpoint)
 		}
 	}
@@ -41,7 +63,10 @@ func checkSessionGeoLocation(session *BgpSession) bool {
 		return false
 	}
 
-	// Check each endpoint
+	// Remove duplicates to avoid redundant checks
+	endpointsToCheck = removeDuplicateEndpoints(endpointsToCheck)
+
+	// Check each unique endpoint - if ANY endpoint violates geo rules, teardown the session
 	for _, endpoint := range endpointsToCheck {
 		if shouldTeardownForEndpoint(session, endpoint) {
 			return true
@@ -52,6 +77,7 @@ func checkSessionGeoLocation(session *BgpSession) bool {
 }
 
 // getWireGuardEndpoint gets the actual endpoint for a WireGuard interface/peer combination
+// Returns only the IP/hostname portion (without port) for geo checking
 func getWireGuardEndpoint(interfaceName, publicKey string) string {
 	// Create context with timeout
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -81,10 +107,11 @@ func getWireGuardEndpoint(interfaceName, publicKey string) string {
 
 		if strings.TrimSpace(parts[0]) == publicKey {
 			endpoint := strings.TrimSpace(parts[1])
-			// Remove port if present (we only care about the IP/hostname for geo checking)
+			// Extract only the IP/hostname portion for geo checking
 			if host, _, err := net.SplitHostPort(endpoint); err == nil {
 				return host
 			}
+			// If no port present, return the endpoint as is
 			return endpoint
 		}
 	}
