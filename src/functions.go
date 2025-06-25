@@ -220,16 +220,15 @@ func systemPing(address string, count, timeoutSeconds int) (int, float64, error)
 
 	// Add common arguments
 	const interval float64 = 0.2                                          // interval seconds between packets (200ms)
-	deadline := timeoutSeconds*count + int(float64(count)*interval) + 1   // deadline in seconds
 	args = append(args, "-c", strconv.Itoa(count))                        // packet count
-	args = append(args, "-w", strconv.Itoa(deadline))                     // deadline in seconds(with buffer)
 	args = append(args, "-W", strconv.Itoa(timeoutSeconds))               // timeout per packet
 	args = append(args, "-i", strconv.FormatFloat(interval, 'f', -1, 64)) // interval between packets (200ms)
 	args = append(args, "-q")                                             // quiet mode (only summary)
 	args = append(args, address)                                          // target address
 
 	// Create context with timeout (add another 5 seconds buffer to deadline)
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(deadline+5)*time.Second)
+	deadline := timeoutSeconds*count + int(float64(count)*interval) + 5 // deadline in seconds
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(deadline)*time.Second)
 	defer cancel()
 
 	// Execute ping command
