@@ -200,19 +200,31 @@ func (bp *BirdPool) ReleaseConnection(pc *PooledConnection) {
 
 // Close closes all connections in the pool
 func (bp *BirdPool) Close() {
-	close(bp.shutdown) // Signal shutdown
+	// Safely close shutdown channel only once
+	select {
+	case <-bp.shutdown:
+		// Already closed, return early
+		return
+	default:
+		close(bp.shutdown) // Signal shutdown
+	}
 
 	bp.Lock()
 	defer bp.Unlock()
 
-	// Close available channel
-	close(bp.available)
+	// Safely close available channel
+	select {
+	case <-bp.available:
+		// Channel might already be closed, safe to continue
+	default:
+		close(bp.available)
+	}
 
 	// Drain the channel and close connections
 	for {
 		select {
 		case pc := <-bp.available:
-			if pc.conn != nil {
+			if pc != nil && pc.conn != nil {
 				pc.conn.Close()
 			}
 		default:
@@ -223,7 +235,7 @@ drainComplete:
 
 	// Close remaining connections in pool
 	for _, pc := range bp.pool {
-		if pc.conn != nil {
+		if pc != nil && pc.conn != nil {
 			pc.conn.Close()
 			pc.conn = nil
 		}
