@@ -19,7 +19,7 @@ import (
 
 const (
 	SERVER_NAME    = "iEdon-PeerAPI-Agent"
-	SERVER_VERSION = "1.5.0"
+	SERVER_VERSION = "1.5.1"
 )
 
 var SERVER_SIGNATURE = fmt.Sprintf("%s (%s; %s; %s)", SERVER_NAME+"/"+SERVER_VERSION, runtime.GOOS, runtime.GOARCH, runtime.Version())

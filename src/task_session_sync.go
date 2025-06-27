@@ -151,17 +151,7 @@ func reportNewStatusToCenter(sessionUUID string, status int) error {
 // processNewSession handles a newly discovered session
 func processNewSession(session *BgpSession, nextLocal map[string]BgpSession) {
 	// Validate session inputs if not torndown
-	if session.Status != PEERING_STATUS_TEARDOWN {
-		err := validateSessionInputs(session)
-		if err != nil {
-			log.Printf("[SyncSessions] Session %s has invalid configuration, tearing down: %v", session.UUID, err)
-			session.Status = PEERING_STATUS_TEARDOWN
-			err = reportNewStatusToCenter(session.UUID, PEERING_STATUS_TEARDOWN)
-			if err != nil {
-				log.Printf("[SyncSessions] Failed to report problem status for session %s: %v", session.UUID, err)
-			}
-		}
-	}
+	checkAndValidateSession(session)
 
 	switch session.Status {
 	case PEERING_STATUS_QUEUED_FOR_SETUP:
@@ -204,6 +194,8 @@ func processChangedSession(newSession *BgpSession, oldSession *BgpSession, nextL
 		nextLocal[newSession.UUID] = *newSession
 		return
 	}
+
+	checkAndValidateSession(newSession)
 
 	// Handle session based on its new status
 	switch newSession.Status {
@@ -364,11 +356,6 @@ func validateIPAddressIfGiven(ipStr string) error {
 		return fmt.Errorf("invalid IP address format")
 	}
 
-	// Additional security check: ensure it's a clean IP without extra characters
-	if ip.String() != ipStr {
-		return fmt.Errorf("IP address contains unexpected characters")
-	}
-
 	return nil
 }
 
@@ -419,12 +406,7 @@ func validateEndpoint(endpoint, sessionType string) error {
 	}
 
 	// Validate host (can be IP or hostname)
-	if ip := net.ParseIP(host); ip != nil {
-		// It's an IP address
-		if ip.String() != host {
-			return fmt.Errorf("ip address in endpoint contains unexpected characters")
-		}
-	} else {
+	if ip := net.ParseIP(host); ip == nil {
 		// It's a hostname
 		if len(host) > 253 {
 			return fmt.Errorf("endpoint hostname too long (max 253 characters)")
@@ -491,4 +473,19 @@ func validateSessionInputs(session *BgpSession) error {
 	}
 
 	return nil
+}
+
+func checkAndValidateSession(session *BgpSession) {
+	// Validate session inputs if not torndown
+	if session.Status != PEERING_STATUS_TEARDOWN {
+		err := validateSessionInputs(session)
+		if err != nil {
+			log.Printf("[SyncSessions] Session %s has invalid configuration, tearing down: %v", session.UUID, err)
+			session.Status = PEERING_STATUS_TEARDOWN
+			err = reportNewStatusToCenter(session.UUID, PEERING_STATUS_TEARDOWN)
+			if err != nil {
+				log.Printf("[SyncSessions] Failed to report problem status for session %s: %v", session.UUID, err)
+			}
+		}
+	}
 }
