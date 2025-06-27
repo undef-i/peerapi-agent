@@ -48,12 +48,13 @@ type wireGuardConfig struct {
 	IPv4                           string `json:"ipv4"`              // IPv4 address for WireGuard interface
 	IPv6                           string `json:"ipv6"`              // IPv6 address for WireGuard interface
 	IPv6LinkLocal                  string `json:"ipv6LinkLocal"`     // IPv6 link-local address for WireGuard interface
-	LocalEndpointHost              string `json:"LocalEndpointHost"` // Local endpoint for WireGuard interface
+	LocalEndpointHost              string `json:"localEndpointHost"` // Local endpoint for WireGuard interface
 	PrivateKeyPath                 string `json:"privateKeyPath"`    // Private key for WireGuard interface
 	PublicKeyPath                  string `json:"publicKeyPath"`     // Public key for WireGuard interface
 	PrivateKey                     string `json:"-"`
 	PublicKey                      string `json:"-"`
 	PersistentKeepaliveInterval    int    `json:"persistentKeepaliveInterval"` // Persistent keepalive interval in seconds
+	AllowedIPs                     string `json:"allowedIps"`                  // Allowed IPs for WireGuard peers
 	DNSUpdateInterval              int    `json:"dnsUpdateInterval"`           // Interval for WireGuard DNS endpoint updates in seconds
 	DN42BandwidthCommunity         int    `json:"dn42BandwidthCommunity"`
 	DN42InterfaceSecurityCommunity int    `json:"dn42InterfaceSecurityCommunity"`
@@ -81,7 +82,7 @@ type loggerConfig struct {
 type metricConfig struct {
 	AutoTeardown                  bool     `json:"autoTeardown"`                  // Automatically teardown sessions based on metrics
 	MaxMindGeoLiteCountryMmdbPath string   `json:"maxMindGeoLiteCountryMmdbPath"` // Path to MaxMind GeoLite2 Country database
-	GeoIPCountryMode              string   `json:"geoIPCountryMode"`              // Mode for GeoIP country filtering (blacklist/whitelist)
+	GeoIPCountryMode              string   `json:"geoIpCountryMode"`              // Mode for GeoIP country filtering (blacklist/whitelist)
 	BlacklistGeoCountries         []string `json:"blacklistGeoCountries"`         // List of countries to blacklist
 	WhitelistGeoCountries         []string `json:"whitelistGeoCountries"`         // List of countries to whitelist
 	PingCommandPath               string   `json:"pingCommandPath"`               // Path to the ping command

@@ -131,7 +131,7 @@ func configureWireguardInterface(ctx context.Context, session *BgpSession) error
 		"listen-port", strconv.Itoa(port),
 		"peer", session.Credential,
 		"persistent-keepalive", strconv.Itoa(cfg.WireGuard.PersistentKeepaliveInterval),
-		"allowed-ips", "172.16.0.0/12,10.0.0.0/8,fd00::/8,fe80::/10",
+		"allowed-ips", cfg.WireGuard.AllowedIPs,
 	}
 	if session.Endpoint != "" {
 		wgArgs = append(wgArgs, "endpoint", session.Endpoint)
@@ -191,7 +191,8 @@ func configureGreInterface(ctx context.Context, session *BgpSession) error {
 		cmd = exec.CommandContext(ctx, cfg.Bird.IPCommandPath, "-6", "tunnel", "add", session.Interface,
 			"mode", "ip6gre",
 			"local", cfg.GRE.LocalEndpointHost6,
-			"remote", session.Endpoint)
+			"remote", session.Endpoint,
+			"ttl", "255")
 
 		log.Printf("Creating IPv6 GRE tunnel: %s with local: %s remote: %s",
 			session.Interface, cfg.GRE.LocalEndpointHost6, session.Endpoint)
@@ -200,7 +201,8 @@ func configureGreInterface(ctx context.Context, session *BgpSession) error {
 		cmd = exec.CommandContext(ctx, cfg.Bird.IPCommandPath, "tunnel", "add", session.Interface,
 			"mode", "gre",
 			"local", cfg.GRE.LocalEndpointHost4,
-			"remote", session.Endpoint)
+			"remote", session.Endpoint,
+			"ttl", "255")
 
 		log.Printf("Creating IPv4 GRE tunnel: %s with local: %s remote: %s",
 			session.Interface, cfg.GRE.LocalEndpointHost4, session.Endpoint)
@@ -267,8 +269,8 @@ func configureIPAddresses(ctx context.Context, session *BgpSession) error {
 
 	for _, ipAddr := range ipAddresses {
 		if allowed, err := validateInterfaceIP(ipAddr.ip); !allowed {
-			teardownViolatingIPSession(session, fmt.Sprintf("%s address validation failed: %v", ipAddr.name, err))
-			return fmt.Errorf("session %s address %s validation failed: %v", ipAddr.name, ipAddr.ip, err)
+			teardownViolatingIPSession(session)
+			return fmt.Errorf("%s address %s validation failed: %v", ipAddr.name, ipAddr.ip, err)
 		}
 	}
 
@@ -623,9 +625,7 @@ func deleteSession(session *BgpSession) error {
 }
 
 // teardownViolatingIPSession tears down a session that violates IP rules
-func teardownViolatingIPSession(session *BgpSession, reason string) {
-	log.Printf("[Session] IP Validation: <%s> Session violates IP rules (%s), tearing down", session.UUID, reason)
-
+func teardownViolatingIPSession(session *BgpSession) {
 	// Report teardown status to PeerAPI
 	err := reportNewStatusToCenter(session.UUID, PEERING_STATUS_TEARDOWN)
 	if err != nil {
