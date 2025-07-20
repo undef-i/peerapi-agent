@@ -77,6 +77,7 @@ type BGPMetric struct {
 	State  string          `json:"state"`
 	Info   string          `json:"info"`
 	Type   string          `json:"type"` // BGP_SESSION_TYPE_IPV4, BGP_SESSION_TYPE_IPV6, or BGP_SESSION_TYPE_MPBGP
+	Since  string          `json:"since"`
 	Routes BGPRoutesMetric `json:"routes"`
 }
 

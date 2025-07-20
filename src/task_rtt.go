@@ -205,7 +205,7 @@ func processBatchRTT(ctx context.Context, sessions []BgpSession) {
 	// Create channels for work distribution
 	jobs := make(chan BgpSession, len(sessions))
 	results := make(chan struct{}, len(sessions))
-	for w := 1; w <= workerCount; w++ {
+	for range workerCount {
 		go rttWorker(ctx, jobs, results)
 	}
 

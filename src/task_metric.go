@@ -183,13 +183,14 @@ func collectSessionMetric(session BgpSession, timestamp int64, birdMetrics map[s
 		if metrics, exists := birdMetrics[sessionName]; exists {
 			bgpMetrics = []BGPMetric{
 				createBGPMetric(sessionName, metrics.State, metrics.Info, BGP_SESSION_TYPE_MPBGP,
+					metrics.Since,
 					int(metrics.IPv4Import), int(metrics.IPv4Export),
 					int(metrics.IPv6Import), int(metrics.IPv6Export)),
 			}
 		} else {
 			// Default empty metrics if BIRD data is missing
 			bgpMetrics = []BGPMetric{
-				createBGPMetric(sessionName, "Unknown", "No data", BGP_SESSION_TYPE_MPBGP, 0, 0, 0, 0),
+				createBGPMetric(sessionName, "Unknown", "No data", BGP_SESSION_TYPE_MPBGP, "", 0, 0, 0, 0),
 			}
 		}
 	} else {
@@ -199,20 +200,20 @@ func collectSessionMetric(session BgpSession, timestamp int64, birdMetrics map[s
 		if session.IPv6LinkLocal != "" || session.IPv6 != "" {
 			v6Name := sessionName + "_v6"
 			if metrics, exists := birdMetrics[v6Name]; exists {
-				bgpMetrics = append(bgpMetrics, createBGPMetric(v6Name, metrics.State, metrics.Info, BGP_SESSION_TYPE_IPV6,
+				bgpMetrics = append(bgpMetrics, createBGPMetric(v6Name, metrics.State, metrics.Info, BGP_SESSION_TYPE_IPV6, metrics.Since,
 					0, 0, int(metrics.IPv6Import), int(metrics.IPv6Export)))
 			} else {
-				bgpMetrics = append(bgpMetrics, createBGPMetric(v6Name, "Unknown", "No data", BGP_SESSION_TYPE_IPV6, 0, 0, 0, 0))
+				bgpMetrics = append(bgpMetrics, createBGPMetric(v6Name, "Unknown", "No data", BGP_SESSION_TYPE_IPV6, "", 0, 0, 0, 0))
 			}
 		}
 
 		if session.IPv4 != "" {
 			v4Name := sessionName + "_v4"
 			if metrics, exists := birdMetrics[v4Name]; exists {
-				bgpMetrics = append(bgpMetrics, createBGPMetric(v4Name, metrics.State, metrics.Info, BGP_SESSION_TYPE_IPV4,
+				bgpMetrics = append(bgpMetrics, createBGPMetric(v4Name, metrics.State, metrics.Info, BGP_SESSION_TYPE_IPV4, metrics.Since,
 					int(metrics.IPv4Import), int(metrics.IPv4Export), 0, 0))
 			} else {
-				bgpMetrics = append(bgpMetrics, createBGPMetric(v4Name, "Unknown", "No data", BGP_SESSION_TYPE_IPV4, 0, 0, 0, 0))
+				bgpMetrics = append(bgpMetrics, createBGPMetric(v4Name, "Unknown", "No data", BGP_SESSION_TYPE_IPV4, "", 0, 0, 0, 0))
 			}
 		}
 	}
@@ -303,12 +304,13 @@ func sendMetricsToPeerAPI(metrics map[string]SessionMetric) {
 }
 
 // createBGPMetric creates a BGP metric object with the given parameters
-func createBGPMetric(name, state, info, sessionType string, ipv4Import, ipv4Export, ipv6Import, ipv6Export int) BGPMetric {
+func createBGPMetric(name, state, info, sessionType, since string, ipv4Import, ipv4Export, ipv6Import, ipv6Export int) BGPMetric {
 	return BGPMetric{
 		Name:  name,
 		State: state,
 		Info:  info,
 		Type:  sessionType,
+		Since: since,
 		Routes: BGPRoutesMetric{
 			IPv4: RouteMetricStruct{
 				Imported: RouteMetrics{

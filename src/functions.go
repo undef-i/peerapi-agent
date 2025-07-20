@@ -446,7 +446,7 @@ var (
 func getRandomUnusedPort(proto string) (int, error) {
 	const maxRetries = 10
 
-	for i := 0; i < maxRetries; i++ {
+	for range maxRetries {
 		port, err := _getRandomUnusedPort(proto)
 		if err != nil {
 			return 0, fmt.Errorf("failed to get random unused port: %w", err)

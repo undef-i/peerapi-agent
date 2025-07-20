@@ -488,10 +488,11 @@ func parseProtocolOutput(data []byte) (string, string, string, int64, int64, int
 
 		// Check for DOWN state using regex
 		if stateDownRegex.Match(bytes.TrimSpace(line)) {
-			if currentChannel == "ipv4" {
+			switch currentChannel {
+			case "ipv4":
 				ipv4Import = 0
 				ipv4Export = 0
-			} else if currentChannel == "ipv6" {
+			case "ipv6":
 				ipv6Import = 0
 				ipv6Export = 0
 			}
@@ -504,10 +505,11 @@ func parseProtocolOutput(data []byte) (string, string, string, int64, int64, int
 			exported, err2 := strconv.ParseInt(matches[2], 10, 64)
 
 			if err1 == nil && err2 == nil {
-				if currentChannel == "ipv4" {
+				switch currentChannel {
+				case "ipv4":
 					ipv4Import = imported
 					ipv4Export = exported
-				} else if currentChannel == "ipv6" {
+				case "ipv6":
 					ipv6Import = imported
 					ipv6Export = exported
 				}
@@ -520,7 +522,7 @@ func parseProtocolOutput(data []byte) (string, string, string, int64, int64, int
 
 // Pre-compiled regex patterns for better performance
 var (
-	routeLineRegex = regexp.MustCompile(`^Routes:\s+(\d+)\s+imported,\s+(\d+)\s+exported`)
+	routeLineRegex = regexp.MustCompile(`^Routes:\s+(\d+)\s+imported,(?:\s+\d+\s+filtered,)?\s+(\d+)\s+exported`)
 	channelRegex   = regexp.MustCompile(`^Channel\s+(ipv[46])$`)
 	stateDownRegex = regexp.MustCompile(`^State:.*DOWN`)
 
