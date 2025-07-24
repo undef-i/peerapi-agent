@@ -195,7 +195,15 @@ func processChangedSession(newSession *BgpSession, oldSession *BgpSession, nextL
 		return
 	}
 
-	checkAndValidateSession(newSession)
+	// special case: delete torndown session,
+	// so that already torndown sessions changed to delete status will not be torndown again
+	var isDeletingTorndownSession bool = (oldSession.Status == PEERING_STATUS_TEARDOWN &&
+		(newSession.Status == PEERING_STATUS_QUEUED_FOR_DELETE ||
+			newSession.Status == PEERING_STATUS_DELETED))
+
+	if !isDeletingTorndownSession {
+		checkAndValidateSession(newSession)
+	}
 
 	// Handle session based on its new status
 	switch newSession.Status {
