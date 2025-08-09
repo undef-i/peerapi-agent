@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"log"
 	"regexp"
 	"strconv"
 	"sync"
@@ -22,11 +21,13 @@ type PooledConnection struct {
 // BirdPool manages a pool of BIRD connections
 type BirdPool struct {
 	sync.RWMutex
-	pool        []*PooledConnection
-	available   chan *PooledConnection // Channel for available connections
-	poolSize    int
-	poolSizeMax int
-	socketPath  string
+	pool                   []*PooledConnection
+	available              chan *PooledConnection // Channel for available connections
+	poolSize               int
+	poolSizeMax            int
+	connectionMaxRetries   int
+	connectionRetryDelayMs int
+	socketPath             string
 	// nextID      int           // For assigning connection IDs
 	shutdown chan struct{} // Graceful shutdown signal
 }
@@ -63,17 +64,19 @@ type BatchResult struct {
 }
 
 // NewBirdPool creates a new BIRD connection pool
-func NewBirdPool(socketPath string, poolSize, poolSizeMax int) (*BirdPool, error) {
+func NewBirdPool(socketPath string, poolSize, poolSizeMax, connectionMaxRetries, connectionRetryDelayMs int) (*BirdPool, error) {
 	if poolSizeMax < poolSize {
 		poolSizeMax = poolSize * 4 // Default max is 4x the base pool size
 	}
 
 	bp := &BirdPool{
-		poolSize:    poolSize,
-		poolSizeMax: poolSizeMax,
-		socketPath:  socketPath,
-		available:   make(chan *PooledConnection, poolSizeMax), // Buffered channel
-		shutdown:    make(chan struct{}),
+		poolSize:               poolSize,
+		poolSizeMax:            poolSizeMax,
+		connectionMaxRetries:   connectionMaxRetries,
+		connectionRetryDelayMs: connectionRetryDelayMs,
+		socketPath:             socketPath,
+		available:              make(chan *PooledConnection, poolSizeMax), // Buffered channel
+		shutdown:               make(chan struct{}),
 	}
 
 	// Initialize connection pool
@@ -101,21 +104,33 @@ func NewBirdPool(socketPath string, poolSize, poolSizeMax int) (*BirdPool, error
 }
 
 func (bp *BirdPool) createConnection() (*BirdConn, error) {
-	bc, err := NewBirdConnection(bp.socketPath)
-	if err != nil {
-		return nil, err
-	}
-
-	restricted, err := bc.Restrict()
-	if err != nil || !restricted {
-		bc.Close()
-		if err == nil {
-			err = fmt.Errorf("failed to enter restricted mode")
+	// With retry logic for handling connection / temporary resource unavailability
+	var lastError error
+	for attempt := range bp.connectionMaxRetries {
+		bc, lastError := NewBirdConnection(bp.socketPath)
+		if lastError != nil {
+			// Retry on connection failure
+			if attempt < bp.connectionMaxRetries-1 {
+				time.Sleep(time.Duration(bp.connectionRetryDelayMs) * time.Millisecond)
+				continue
+			}
+			return nil, lastError
 		}
-		return nil, err
+
+		restricted, err := bc.Restrict()
+		if err != nil || !restricted {
+			bc.Close()
+			if err == nil {
+				err = fmt.Errorf("failed to enter restricted mode")
+			}
+			// Don't retry restriction failures
+			return nil, err
+		}
+
+		return bc, nil
 	}
 
-	return bc, nil
+	return nil, fmt.Errorf("failed to create connection after %d attempts, last error: %v", bp.connectionMaxRetries, lastError)
 }
 
 func (bp *BirdPool) GetConnection() (*PooledConnection, error) {
@@ -358,61 +373,6 @@ func (bp *BirdPool) Configure() (bool, error) {
 	// Dismiss output
 	bc.Read(nil)
 	return true, nil
-}
-
-// BatchShowProtocols executes multiple BIRD protocol queries concurrently
-// This will utilize connection pool and return results in a map
-func (bp *BirdPool) BatchGetProtocolStatus(sessionNames []string) map[string]ProtocolMetrics {
-	if len(sessionNames) == 0 {
-		return make(map[string]ProtocolMetrics)
-	}
-
-	results := make(map[string]ProtocolMetrics)
-	resultsChan := make(chan ProtocolResult, len(sessionNames))
-
-	// Execute queries in parallel using goroutines
-	var wg sync.WaitGroup
-	for _, name := range sessionNames {
-		wg.Add(1)
-		go func(sessionName string) {
-			defer wg.Done()
-
-			// Call the optimized version of ShowProtocolRoutes
-			state, since, info, ipv4Import, ipv4Export, ipv6Import, ipv6Export, err := bp.GetProtocolStatus(sessionName)
-
-			metrics := ProtocolMetrics{
-				State:      state,
-				Since:      since,
-				Info:       info,
-				IPv4Import: ipv4Import,
-				IPv4Export: ipv4Export,
-				IPv6Import: ipv6Import,
-				IPv6Export: ipv6Export,
-			}
-
-			resultsChan <- ProtocolResult{
-				SessionName: sessionName,
-				Metrics:     metrics,
-				Error:       err,
-			}
-		}(name)
-	}
-
-	// Wait for all goroutines to complete
-	wg.Wait()
-	close(resultsChan)
-
-	// Collect results
-	for result := range resultsChan {
-		if result.Error == nil {
-			results[result.SessionName] = result.Metrics
-		} else {
-			// TODO !!! remove this log line in production
-			log.Printf("[BirdPool] Error getting protocol status for %s: %v", result.SessionName, result.Error)
-		}
-	}
-
-	return results
 }
 
 // GetProtocolStatus executes "show protocols all <sessionName>" and extracts route statistics

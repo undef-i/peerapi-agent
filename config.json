@@ -66,6 +66,8 @@
     "controlSocket": "/var/run/bird/bird.ctl",
     "poolSize": 5,
     "poolSizeMax": 64,
+    "connectionMaxRetries": 5,
+    "connectionRetryDelayMs": 50,
     "bgpPeerConfDir": "/etc/bird/peers",
     "bgpPeerConfTemplateFile": "./templates/peer.conf",
     "ipCommandPath": "/usr/sbin/ip"

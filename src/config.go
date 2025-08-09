@@ -37,6 +37,8 @@ type birdConfig struct {
 	ControlSocket           string             `json:"controlSocket"`
 	PoolSize                int                `json:"poolSize"`                // Number of connections to the BIRD control socket
 	PoolSizeMax             int                `json:"poolSizeMax"`             // Maximum size of the connection pool
+	ConnectionMaxRetries    int                `json:"connectionMaxRetries"`    // Maximum number of retries for connection attempts
+	ConnectionRetryDelayMs  int                `json:"connectionRetryDelayMs"`  // Delay in milliseconds between connection retries
 	BGPPeerConfDir          string             `json:"bgpPeerConfDir"`          // Directory for BGP peer configuration files
 	BGPPeerConfTemplateFile string             `json:"bgpPeerConfTemplateFile"` // Template for BGP peer configuration files
 	BGPPeerConfTemplate     *template.Template `json:"-"`

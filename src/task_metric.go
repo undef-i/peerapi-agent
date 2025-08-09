@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v3/client"
-	"github.com/iedon/peerapi-agent/bird"
 )
 
 // MetricJob represents a single metric collection job
@@ -71,36 +70,6 @@ func batchCollectSessionMetrics(sessions []BgpSession, timestamp int64) map[stri
 
 	startTime := time.Now()
 
-	// Pre-collect BIRD protocol data for all sessions in parallel
-	sessionNames := make([]string, 0, len(sessions)*2) // Estimate for traditional BGP
-	sessionNameMap := make(map[string]BgpSession)
-
-	for _, session := range sessions {
-		sessionName := fmt.Sprintf("DN42_%d_%s", session.ASN, session.Interface)
-		mpBGP := slices.Contains(session.Extensions, "mp-bgp")
-
-		if mpBGP {
-			// MP-BGP uses single session
-			sessionNames = append(sessionNames, sessionName)
-			sessionNameMap[sessionName] = session
-		} else {
-			// Traditional BGP uses separate v4 and v6 sessions
-			if session.IPv4 != "" {
-				v4Name := sessionName + "_v4"
-				sessionNames = append(sessionNames, v4Name)
-				sessionNameMap[v4Name] = session
-			}
-			if session.IPv6LinkLocal != "" || session.IPv6 != "" {
-				v6Name := sessionName + "_v6"
-				sessionNames = append(sessionNames, v6Name)
-				sessionNameMap[v6Name] = session
-			}
-		}
-	}
-
-	// Batch query BIRD for all protocol statuses concurrently
-	birdMetrics := birdPool.BatchGetProtocolStatus(sessionNames)
-
 	// Create worker pool for concurrent session processing
 	workerCount := min(len(sessions), cfg.Metric.SessionWorkerCount)
 	if workerCount == 0 {
@@ -114,7 +83,7 @@ func batchCollectSessionMetrics(sessions []BgpSession, timestamp int64) map[stri
 	var wg sync.WaitGroup
 	for range workerCount {
 		wg.Add(1)
-		go metricWorker(jobs, results, birdMetrics, &wg)
+		go metricWorker(jobs, results, &wg)
 	}
 
 	// Send jobs to workers
@@ -150,7 +119,7 @@ func batchCollectSessionMetrics(sessions []BgpSession, timestamp int64) map[stri
 }
 
 // metricWorker processes metric collection jobs concurrently
-func metricWorker(jobs <-chan MetricJob, results chan<- MetricResult, birdMetrics map[string]bird.ProtocolMetrics, wg *sync.WaitGroup) {
+func metricWorker(jobs <-chan MetricJob, results chan<- MetricResult, wg *sync.WaitGroup) {
 	defer wg.Done()
 
 	for job := range jobs {
@@ -159,7 +128,7 @@ func metricWorker(jobs <-chan MetricJob, results chan<- MetricResult, birdMetric
 		}
 
 		// Collect metrics for this session
-		metric, err := collectSessionMetric(job.Session, job.Timestamp, birdMetrics)
+		metric, err := collectSessionMetric(job.Session, job.Timestamp)
 		if err != nil {
 			result.Error = err
 		} else {
@@ -170,50 +139,53 @@ func metricWorker(jobs <-chan MetricJob, results chan<- MetricResult, birdMetric
 	}
 }
 
-// collectSessionMetric collects metrics for a single session using pre-fetched BIRD data
-func collectSessionMetric(session BgpSession, timestamp int64, birdMetrics map[string]bird.ProtocolMetrics) (SessionMetric, error) {
+// collectSessionMetric collects metrics for a single session by querying BIRD directly
+func collectSessionMetric(session BgpSession, timestamp int64) (SessionMetric, error) {
 	sessionName := fmt.Sprintf("DN42_%d_%s", session.ASN, session.Interface)
 	mpBGP := slices.Contains(session.Extensions, "mp-bgp")
 
 	var bgpMetrics []BGPMetric
 
-	// Collect BGP metrics using pre-fetched data
+	// Collect BGP metrics by querying BIRD directly
 	if mpBGP {
-		// For MP-BGP, look up the single session
-		if metrics, exists := birdMetrics[sessionName]; exists {
+		// For MP-BGP, query the single session
+		state, since, info, ipv4Import, ipv4Export, ipv6Import, ipv6Export, err := birdPool.GetProtocolStatus(sessionName)
+		if err != nil {
+			// Create default metrics on error
 			bgpMetrics = []BGPMetric{
-				createBGPMetric(sessionName, metrics.State, metrics.Info, BGP_SESSION_TYPE_MPBGP,
-					metrics.Since,
-					int(metrics.IPv4Import), int(metrics.IPv4Export),
-					int(metrics.IPv6Import), int(metrics.IPv6Export)),
+				createBGPMetric(sessionName, "Unknown", fmt.Sprintf("Query error: %v", err), BGP_SESSION_TYPE_MPBGP, "", 0, 0, 0, 0),
 			}
 		} else {
-			// Default empty metrics if BIRD data is missing
 			bgpMetrics = []BGPMetric{
-				createBGPMetric(sessionName, "Unknown", "No data", BGP_SESSION_TYPE_MPBGP, "", 0, 0, 0, 0),
+				createBGPMetric(sessionName, state, info, BGP_SESSION_TYPE_MPBGP,
+					since,
+					int(ipv4Import), int(ipv4Export),
+					int(ipv6Import), int(ipv6Export)),
 			}
 		}
 	} else {
-		// For traditional BGP, look up v4 and v6 sessions separately
+		// For traditional BGP, query v4 and v6 sessions separately
 		bgpMetrics = make([]BGPMetric, 0, 2)
 
 		if session.IPv6LinkLocal != "" || session.IPv6 != "" {
 			v6Name := sessionName + "_v6"
-			if metrics, exists := birdMetrics[v6Name]; exists {
-				bgpMetrics = append(bgpMetrics, createBGPMetric(v6Name, metrics.State, metrics.Info, BGP_SESSION_TYPE_IPV6, metrics.Since,
-					0, 0, int(metrics.IPv6Import), int(metrics.IPv6Export)))
+			state, since, info, _, _, ipv6Import, ipv6Export, err := birdPool.GetProtocolStatus(v6Name)
+			if err != nil {
+				bgpMetrics = append(bgpMetrics, createBGPMetric(v6Name, "Unknown", fmt.Sprintf("Query error: %v", err), BGP_SESSION_TYPE_IPV6, "", 0, 0, 0, 0))
 			} else {
-				bgpMetrics = append(bgpMetrics, createBGPMetric(v6Name, "Unknown", "No data", BGP_SESSION_TYPE_IPV6, "", 0, 0, 0, 0))
+				bgpMetrics = append(bgpMetrics, createBGPMetric(v6Name, state, info, BGP_SESSION_TYPE_IPV6, since,
+					0, 0, int(ipv6Import), int(ipv6Export)))
 			}
 		}
 
 		if session.IPv4 != "" {
 			v4Name := sessionName + "_v4"
-			if metrics, exists := birdMetrics[v4Name]; exists {
-				bgpMetrics = append(bgpMetrics, createBGPMetric(v4Name, metrics.State, metrics.Info, BGP_SESSION_TYPE_IPV4, metrics.Since,
-					int(metrics.IPv4Import), int(metrics.IPv4Export), 0, 0))
+			state, since, info, ipv4Import, ipv4Export, _, _, err := birdPool.GetProtocolStatus(v4Name)
+			if err != nil {
+				bgpMetrics = append(bgpMetrics, createBGPMetric(v4Name, "Unknown", fmt.Sprintf("Query error: %v", err), BGP_SESSION_TYPE_IPV4, "", 0, 0, 0, 0))
 			} else {
-				bgpMetrics = append(bgpMetrics, createBGPMetric(v4Name, "Unknown", "No data", BGP_SESSION_TYPE_IPV4, "", 0, 0, 0, 0))
+				bgpMetrics = append(bgpMetrics, createBGPMetric(v4Name, state, info, BGP_SESSION_TYPE_IPV4, since,
+					int(ipv4Import), int(ipv4Export), 0, 0))
 			}
 		}
 	}

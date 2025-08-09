@@ -19,7 +19,7 @@ import (
 
 const (
 	SERVER_NAME    = "iEdon-PeerAPI-Agent"
-	SERVER_VERSION = "1.5.4"
+	SERVER_VERSION = "1.6.0"
 )
 
 var SERVER_SIGNATURE = fmt.Sprintf("%s (%s; %s; %s)", SERVER_NAME+"/"+SERVER_VERSION, runtime.GOOS, runtime.GOARCH, runtime.Version())
@@ -46,7 +46,7 @@ var rttMutex sync.RWMutex                      // Dedicated mutex for RTT-relate
 
 func initBirdConnectionPool() error {
 	var err error
-	birdPool, err = bird.NewBirdPool(cfg.Bird.ControlSocket, cfg.Bird.PoolSize, cfg.Bird.PoolSizeMax)
+	birdPool, err = bird.NewBirdPool(cfg.Bird.ControlSocket, cfg.Bird.PoolSize, cfg.Bird.PoolSizeMax, cfg.Bird.ConnectionMaxRetries, cfg.Bird.ConnectionRetryDelayMs)
 	if err != nil {
 		return fmt.Errorf("failed to initialize bird manager: %v", err)
 	}
