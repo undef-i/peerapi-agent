@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"log"
 	"regexp"
 	"strconv"
 	"sync"
@@ -405,6 +406,9 @@ func (bp *BirdPool) BatchGetProtocolStatus(sessionNames []string) map[string]Pro
 	for result := range resultsChan {
 		if result.Error == nil {
 			results[result.SessionName] = result.Metrics
+		} else {
+			// TODO !!! remove this log line in production
+			log.Printf("[BirdPool] Error getting protocol status for %s: %v", result.SessionName, result.Error)
 		}
 	}
 
