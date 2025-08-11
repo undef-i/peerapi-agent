@@ -269,7 +269,6 @@ func configureIPAddresses(ctx context.Context, session *BgpSession) error {
 
 	for _, ipAddr := range ipAddresses {
 		if allowed, err := validateInterfaceIP(ipAddr.ip); !allowed {
-			teardownViolatingIPSession(session)
 			return fmt.Errorf("%s address %s validation failed: %v", ipAddr.name, ipAddr.ip, err)
 		}
 	}
@@ -622,13 +621,4 @@ func deleteSession(session *BgpSession) error {
 	}
 
 	return nil
-}
-
-// teardownViolatingIPSession tears down a session that violates IP rules
-func teardownViolatingIPSession(session *BgpSession) {
-	// Report teardown status to PeerAPI
-	err := reportNewStatusToCenter(session.UUID, PEERING_STATUS_TEARDOWN)
-	if err != nil {
-		log.Printf("<%s> Failed to report teardown status: %v", session.UUID, err)
-	}
 }
