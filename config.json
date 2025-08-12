@@ -79,7 +79,7 @@
     "ifaceIp6Forwarding": true,
     "ifaceIp6AcceptRa": false,
     "ifaceRpFilter": 0,
-    "ifaceAcceptLocal": true 
+    "ifaceAcceptLocal": true
   },
 
   "metric": {
