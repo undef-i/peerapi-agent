@@ -73,6 +73,15 @@
     "ipCommandPath": "/usr/sbin/ip"
   },
 
+  "sysctl": {
+    "commandPath": "/usr/bin/sysctl",
+    "ifaceIpForwarding": true,
+    "ifaceIp6Forwarding": true,
+    "ifaceIp6AcceptRa": false,
+    "ifaceRpFilter": 0,
+    "ifaceAcceptLocal": true 
+  },
+
   "metric": {
     "autoTeardown": true,
     "maxMindGeoLiteCountryMmdbPath": "./GeoLite2-Country.mmdb",

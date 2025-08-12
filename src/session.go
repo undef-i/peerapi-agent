@@ -323,6 +323,38 @@ func setIPv6InterfaceRoute(ctx context.Context, session *BgpSession) error {
 	return nil
 }
 
+// applySysctlSettings applies sysctl settings to the interface for optimal BGP performance and security
+func applySysctlSettings(ctx context.Context, interfaceName string) {
+	// Helper function to convert bool to string
+	boolToStr := func(b bool) string {
+		if b {
+			return "1"
+		}
+		return "0"
+	}
+
+	// Define sysctl parameters with their values and descriptions
+	sysctlParams := map[string]struct {
+		value string
+		desc  string
+	}{
+		fmt.Sprintf("net.ipv4.conf.%s.forwarding", interfaceName):   {boolToStr(cfg.Sysctl.IfaceIPForwarding), "IPv4 forwarding"},
+		fmt.Sprintf("net.ipv6.conf.%s.forwarding", interfaceName):   {boolToStr(cfg.Sysctl.IfaceIP6Forwarding), "IPv6 forwarding"},
+		fmt.Sprintf("net.ipv6.conf.%s.accept_ra", interfaceName):    {boolToStr(cfg.Sysctl.IfaceIP6AcceptRA), "IPv6 Router Advertisement acceptance"},
+		fmt.Sprintf("net.ipv4.conf.%s.rp_filter", interfaceName):    {strconv.Itoa(cfg.Sysctl.IfaceRPFilter), "Reverse Path Filter"},
+		fmt.Sprintf("net.ipv4.conf.%s.accept_local", interfaceName): {boolToStr(cfg.Sysctl.IfaceAcceptLocal), "Accept local traffic"},
+	}
+
+	// Apply all sysctl parameters
+	for param, config := range sysctlParams {
+		cmd := exec.CommandContext(ctx, cfg.Sysctl.CommandPath, "-w", fmt.Sprintf("%s=%s", param, config.value))
+		if output, err := cmd.CombinedOutput(); err != nil {
+			log.Printf("[applySysctlSettings] Warning: Failed to set %s for interface %s: %v (output: \"%s\")",
+				config.desc, interfaceName, err, strings.TrimSpace(string(output)))
+		}
+	}
+}
+
 func bringUpInterface(ctx context.Context, session *BgpSession) error {
 	// Bring up the interface
 	cmd := exec.CommandContext(ctx, cfg.Bird.IPCommandPath, "link", "set", "up", "dev", session.Interface)
@@ -342,6 +374,10 @@ func bringUpInterface(ctx context.Context, session *BgpSession) error {
 			return fmt.Errorf("failed to set IPv6 dev route for interface: %v", err)
 		}
 	}
+
+	// Apply sysctl settings for interface
+	applySysctlSettings(ctx, session.Interface)
+
 	return nil
 }
 
