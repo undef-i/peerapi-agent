@@ -7,8 +7,9 @@ import (
 )
 
 type serverConfig struct {
-	Debug           bool     `json:"debug"` // Will print detail access log for debug
-	Listen          string   `json:"listen"`
+	Debug           bool     `json:"debug"`        // Will print detail access log for debug
+	ListenerType    string   `json:"listenerType"` // "tcp" or "unix" - type of listener to use
+	Listen          string   `json:"listen"`       // For TCP: host:port, For Unix: socket file path
 	BodyLimit       int      `json:"bodyLimit"`
 	ReadTimeout     int      `json:"readTimeout"`
 	WriteTimeout    int      `json:"writeTimeout"`

@@ -1,86 +1,139 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"strings"
 
-	"github.com/gofiber/fiber/v3"
 	"github.com/golang-jwt/jwt/v5"
 )
 
-func initRouter(app *fiber.App) {
-	app.Use(Protected())
-	app.Get("/status", status)
-	app.Get("/sync", manualSync)
-	app.Post("/info", nodePassthroughInfo)
+// Helper functions for HTTP response handling
+func sendJSONResponse(w http.ResponseWriter, statusCode int, message string, data any) {
+	w.Header().Set("Content-Type", "application/json")
+
+	httpStatusCode := statusCode
+	if statusCode == 0 {
+		httpStatusCode = http.StatusOK
+	}
+
+	response := AgentApiResponse{
+		Code:    statusCode,
+		Message: message,
+		Data:    nil,
+	}
+
+	if data != nil {
+		response.Data = data
+	}
+
+	w.WriteHeader(httpStatusCode)
+	json.NewEncoder(w).Encode(response)
 }
 
-func status(c fiber.Ctx) error {
+// setHTTPClientHeader sets the necessary headers for an outbound HTTP request
+func setHTTPClientHeader(r *http.Request, token string, setJsonContentType bool) {
+	if token != "" {
+		r.Header.Set("Authorization", "Bearer\x20"+token)
+	}
+	r.Header.Set("User-Agent", SERVER_SIGNATURE)
+	if setJsonContentType {
+		r.Header.Set("Content-Type", "application/json")
+	}
+}
+
+func initRouter(mux *http.ServeMux) http.Handler {
+	// Register routes
+	mux.HandleFunc("/status", withAuth(status))
+	mux.HandleFunc("/sync", withAuth(manualSync))
+	mux.HandleFunc("/info", withAuth(nodePassthroughInfo))
+
+	// Apply middleware in reverse order (last applied = first executed)
+	var handler http.Handler = mux
+
+	// Apply body limit middleware
+	if cfg.Server.BodyLimit > 0 {
+		handler = bodyLimitMiddleware(int64(cfg.Server.BodyLimit))(handler)
+	}
+
+	// Apply trusted proxy middleware
+	if len(cfg.Server.TrustedProxies) > 0 {
+		handler = trustedProxyMiddleware(cfg.Server.TrustedProxies)(handler)
+	}
+
+	// Apply server header middleware
+	handler = serverHeaderMiddleware(SERVER_SIGNATURE)(handler)
+
+	// Apply debug logging middleware
+	handler = debugLoggingMiddleware(cfg.Server.Debug)(handler)
+
+	return handler
+}
+
+func status(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", "GET")
+		sendJSONResponse(w, http.StatusMethodNotAllowed, "Method not allowed", nil)
+		return
+	}
+
 	// Acquire read locks for both session and metric data
 	sessionMutex.RLock()
 	metricMutex.RLock()
 
-	// Create a response with the current sessions and metrics
-	response := AgentApiResponse{
-		Code:    0,
-		Message: "OK",
-		Data: any(map[string]any{
-			"sessions": localSessions,
-			"metrics":  localMetrics,
-		}),
-	}
-
 	// Release locks in reverse order of acquisition
-	metricMutex.RUnlock()
-	sessionMutex.RUnlock()
+	defer metricMutex.RUnlock()
+	defer sessionMutex.RUnlock()
 
-	return c.JSON(response)
-}
-
-func manualSync(c fiber.Ctx) error {
-	go syncSessions()
-	return c.JSON(AgentApiResponse{
-		Code:    0,
-		Message: "Sync Triggered",
-		Data:    nil,
+	sendJSONResponse(w, 0, "OK", map[string]any{
+		"sessions": localSessions,
+		"metrics":  localMetrics,
 	})
 }
 
-func nodePassthroughInfo(c fiber.Ctx) error {
+func manualSync(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", "GET")
+		sendJSONResponse(w, http.StatusMethodNotAllowed, "Method not allowed", nil)
+		return
+	}
+
+	go syncSessions()
+	sendJSONResponse(w, 0, "Sync initiated", nil)
+}
+
+func nodePassthroughInfo(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		sendJSONResponse(w, http.StatusMethodNotAllowed, "Method not allowed", nil)
+		return
+	}
+
 	// Parse the request body
 	var req NodePassthroughRequest
-	if err := c.Bind().Body(&req); err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(AgentApiResponse{
-			Code:    fiber.StatusBadRequest,
-			Message: "Invalid request format",
-			Data:    err,
-		})
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		sendJSONResponse(w, http.StatusBadRequest, "Invalid request format", nil)
+		return
 	}
 
 	switch req.Data.LinkType {
 	case "wireguard":
-		return getWireGuardPassthroughInfo(c, &req)
+		getWireGuardPassthroughInfo(w, &req)
 	case "gre":
-		return getGREPassthroughInfo(c, &req, false)
+		getGREPassthroughInfo(w, &req, false)
 	case "ip6gre":
-		return getGREPassthroughInfo(c, &req, true)
+		getGREPassthroughInfo(w, &req, true)
 	default:
-		return c.JSON(AgentApiResponse{
-			Code:    fiber.StatusBadRequest,
-			Message: "Link(Interface) type not supported",
-			Data:    nil,
-		})
+		sendJSONResponse(w, http.StatusBadRequest, "Link(Interface) type not supported", nil)
 	}
 }
 
-func getWireGuardPassthroughInfo(c fiber.Ctx, req *NodePassthroughRequest) error {
+func getWireGuardPassthroughInfo(w http.ResponseWriter, req *NodePassthroughRequest) {
 	port, err := getRandomUnusedPort("udp")
 	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(AgentApiResponse{
-			Code:    fiber.StatusInternalServerError,
-			Message: "Failed to get random unused port",
-			Data:    nil,
-		})
+		sendJSONResponse(w, http.StatusInternalServerError, "Failed to get random unused port", nil)
+		return
 	}
 
 	// Create the passthrough data
@@ -93,11 +146,8 @@ func getWireGuardPassthroughInfo(c fiber.Ctx, req *NodePassthroughRequest) error
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims(data))
 	tokenString, err := token.SignedString([]byte(cfg.PeerAPI.SessionPassthroughJwtSecert))
 	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(AgentApiResponse{
-			Code:    fiber.StatusInternalServerError,
-			Message: "Failed to create token",
-			Data:    nil,
-		})
+		sendJSONResponse(w, http.StatusInternalServerError, "Failed to create token", nil)
+		return
 	}
 
 	// Create response with endpoint and WireGuard public key
@@ -105,7 +155,8 @@ func getWireGuardPassthroughInfo(c fiber.Ctx, req *NodePassthroughRequest) error
 	if strings.Contains(endpoint, ":") {
 		endpoint = fmt.Sprintf("[%s]", endpoint)
 	}
-	response := map[string]string{
+
+	sendJSONResponse(w, 0, "OK", map[string]string{
 		"passthrough": tokenString,
 		"info": fmt.Sprintf(
 			"**Endpoint**: ```%s:%d```\n\n**WireGuard** Public Key: ```%s```",
@@ -113,18 +164,12 @@ func getWireGuardPassthroughInfo(c fiber.Ctx, req *NodePassthroughRequest) error
 			port,
 			strings.TrimSpace(cfg.WireGuard.PublicKey),
 		),
-	}
-
-	return c.JSON(AgentApiResponse{
-		Code:    0,
-		Message: "OK",
-		Data:    response,
 	})
 }
 
 // getGREPassthroughInfo generates passthrough information for GRE tunnel sessions
 // The isIPv6 parameter determines whether to use IPv6GRE (true) or IPv4GRE (false)
-func getGREPassthroughInfo(c fiber.Ctx, req *NodePassthroughRequest, isIPv6 bool) error {
+func getGREPassthroughInfo(w http.ResponseWriter, req *NodePassthroughRequest, isIPv6 bool) {
 	// Create the passthrough data (no port required for GRE tunnels)
 	data := map[string]any{
 		"asn": req.ASN,
@@ -134,11 +179,8 @@ func getGREPassthroughInfo(c fiber.Ctx, req *NodePassthroughRequest, isIPv6 bool
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims(data))
 	tokenString, err := token.SignedString([]byte(cfg.PeerAPI.SessionPassthroughJwtSecert))
 	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(AgentApiResponse{
-			Code:    fiber.StatusInternalServerError,
-			Message: "Failed to create token",
-			Data:    nil,
-		})
+		sendJSONResponse(w, http.StatusInternalServerError, "Failed to create token", nil)
+		return
 	}
 
 	// Select the appropriate endpoint based on GRE type (IPv4 or IPv6)
@@ -154,19 +196,12 @@ func getGREPassthroughInfo(c fiber.Ctx, req *NodePassthroughRequest, isIPv6 bool
 
 	endpoint = strings.TrimSpace(endpoint)
 
-	// Create response with endpoint info
-	response := map[string]string{
+	sendJSONResponse(w, 0, "OK", map[string]string{
 		"passthrough": tokenString,
 		"info": fmt.Sprintf(
 			"- Keep in mind that GRE Tunnels are not safe, as traffic is not going to be encrypted\n- You can create only 1 session with the same endpoint\n- You must use IP instead of hostname for endpoint\n\n**Endpoint**: ```%s```\n\n**Tunnel Type**: ```%s``` , **TTL**: ```255```",
 			endpoint,
 			tunnelType,
 		),
-	}
-
-	return c.JSON(AgentApiResponse{
-		Code:    0,
-		Message: "OK",
-		Data:    response,
 	})
 }

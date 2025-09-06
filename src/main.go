@@ -5,24 +5,31 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"runtime"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
 
-	"github.com/gofiber/fiber/v3"
 	"github.com/iedon/peerapi-agent/bird"
 	"github.com/oschwald/geoip2-golang"
 )
 
 const (
 	SERVER_NAME    = "iEdon-PeerAPI-Agent"
-	SERVER_VERSION = "1.6.2"
+	SERVER_VERSION = "1.7.0"
 )
 
-var SERVER_SIGNATURE = fmt.Sprintf("%s (%s; %s; %s)", SERVER_NAME+"/"+SERVER_VERSION, runtime.GOOS, runtime.GOARCH, runtime.Version())
+var GIT_COMMIT string // Set at build time via -ldflags "-X main.GIT_COMMIT=$(git rev-parse --short HEAD)"
+var SERVER_SIGNATURE = fmt.Sprintf("%s (%s; %s; %s; %s)", SERVER_NAME+"/"+SERVER_VERSION, func() string {
+	if GIT_COMMIT != "" {
+		return GIT_COMMIT
+	}
+	return "unknown"
+}(), runtime.GOOS, runtime.GOARCH, runtime.Version())
 
 var (
 	cfg      *config
@@ -43,16 +50,6 @@ var trafficMutex sync.RWMutex // Protects localTrafficRate
 // Global map to track RTT measurement information for sessions
 var rttTrackers = make(map[string]*RTTTracker) // Key is session.UUID
 var rttMutex sync.RWMutex                      // Dedicated mutex for RTT-related operations
-
-func initBirdConnectionPool() error {
-	var err error
-	birdPool, err = bird.NewBirdPool(cfg.Bird.ControlSocket, cfg.Bird.PoolSize, cfg.Bird.PoolSizeMax, cfg.Bird.ConnectionMaxRetries, cfg.Bird.ConnectionRetryDelayMs)
-	if err != nil {
-		return fmt.Errorf("failed to initialize bird manager: %v", err)
-	}
-
-	return nil
-}
 
 func main() {
 	configFile := flag.String("c", "config.json", "Path to the JSON configuration file")
@@ -105,20 +102,41 @@ func main() {
 	}
 	defer birdPool.Close() // Ensure bird pool is closed on exit
 
-	app := fiber.New(fiber.Config{
-		AppName:            SERVER_NAME,
-		ServerHeader:       SERVER_SIGNATURE,
-		EnableIPValidation: true,
-		TrustProxyConfig:   fiber.TrustProxyConfig{Proxies: cfg.Server.TrustedProxies},
-		ReadTimeout:        time.Duration(cfg.Server.ReadTimeout) * time.Second,
-		WriteTimeout:       time.Duration(cfg.Server.WriteTimeout) * time.Second,
-		IdleTimeout:        time.Duration(cfg.Server.IdleTimeout) * time.Second,
-		ReadBufferSize:     cfg.Server.ReadBufferSize,
-		WriteBufferSize:    cfg.Server.WriteBufferSize,
-		BodyLimit:          cfg.Server.BodyLimit,
-	})
+	// Set up HTTP server with router and middleware
+	handler := initRouter(http.NewServeMux())
 
-	initRouter(app)
+	// Set default listener type if not specified
+	listenerType := cfg.Server.ListenerType
+	if listenerType == "" {
+		listenerType = "tcp" // Default to TCP
+	}
+
+	// Log server configuration
+	log.Printf("%s\n\n", SERVER_SIGNATURE)
+	log.Printf("HTTP Server Configuration:\n")
+	log.Printf("  - Listener Type: %s\n", listenerType)
+	log.Printf("  - Listen: %s\n", cfg.Server.Listen)
+	log.Printf("  - Debug: %v\n", cfg.Server.Debug)
+	log.Printf("  - Body Limit: %d bytes\n", cfg.Server.BodyLimit)
+	log.Printf("  - Read Timeout: %ds\n", cfg.Server.ReadTimeout)
+	log.Printf("  - Write Timeout: %ds\n", cfg.Server.WriteTimeout)
+	log.Printf("  - Idle Timeout: %ds\n", cfg.Server.IdleTimeout)
+	log.Printf("  - Read Buffer Size: %d bytes\n", cfg.Server.ReadBufferSize)
+	log.Printf("  - Write Buffer Size: %d bytes\n", cfg.Server.WriteBufferSize)
+	log.Printf("  - Trusted Proxies: %v\n\n", cfg.Server.TrustedProxies)
+
+	// Create custom listener with buffer size configurations
+	listener, err := createHTTPListener(listenerType, cfg.Server.Listen)
+	if err != nil {
+		log.Fatalf("Failed to create custom listener: %v", err)
+	}
+
+	server := &http.Server{
+		Handler:      handler,
+		ReadTimeout:  time.Duration(cfg.Server.ReadTimeout) * time.Second,
+		WriteTimeout: time.Duration(cfg.Server.WriteTimeout) * time.Second,
+		IdleTimeout:  time.Duration(cfg.Server.IdleTimeout) * time.Second,
+	}
 
 	// Create a WaitGroup to track all running background tasks
 	var wg sync.WaitGroup
@@ -141,7 +159,8 @@ func main() {
 	// Start the HTTP server in a goroutine
 	serverShutdown := make(chan error, 1)
 	go func() {
-		if err := app.Listen(cfg.Server.Listen); err != nil {
+		log.Printf("HTTP server starting on %s", cfg.Server.Listen)
+		if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
 			serverShutdown <- err
 		}
 	}()
@@ -172,7 +191,7 @@ func main() {
 	log.Println("Shutting down HTTP server...")
 	serverShutdownStart := time.Now()
 
-	if err := app.ShutdownWithContext(shutdownCtx); err != nil {
+	if err := server.Shutdown(shutdownCtx); err != nil {
 		log.Printf("Error shutting down HTTP server: %v", err)
 	} else {
 		log.Printf("HTTP server shut down successfully in %v", time.Since(serverShutdownStart))
@@ -201,9 +220,27 @@ func main() {
 	log.Println("Server gracefully stopped")
 }
 
+func initBirdConnectionPool() error {
+	var err error
+	birdPool, err = bird.NewBirdPool(cfg.Bird.ControlSocket, cfg.Bird.PoolSize, cfg.Bird.PoolSizeMax, cfg.Bird.ConnectionMaxRetries, cfg.Bird.ConnectionRetryDelayMs)
+	if err != nil {
+		return fmt.Errorf("failed to initialize bird manager: %v", err)
+	}
+
+	return nil
+}
+
 // cleanupResources handles the cleanup of all application resources
 func cleanupResources() {
 	log.Println("Performing final resource cleanup...")
+
+	// Clean up Unix socket file if it was used
+	if strings.ToLower(cfg.Server.ListenerType) == "unix" && cfg.Server.Listen != "" {
+		log.Printf("Removing Unix socket file: %s", cfg.Server.Listen)
+		if err := os.RemoveAll(cfg.Server.Listen); err != nil {
+			log.Printf("Warning: Failed to remove Unix socket file %s: %v", cfg.Server.Listen, err)
+		}
+	}
 
 	// Close the GeoIP database if it was opened
 	if geoDB != nil {

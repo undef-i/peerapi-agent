@@ -1,16 +1,17 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"maps"
+	"net/http"
 	"slices"
 	"sync"
 	"time"
-
-	"github.com/gofiber/fiber/v3/client"
 )
 
 // MetricJob represents a single metric collection job
@@ -217,10 +218,10 @@ func sendMetricsToPeerAPI(metrics map[string]SessionMetric) {
 		return
 	}
 
-	// Create HTTP client with timeout and context
-	agent := client.New().SetTimeout(time.Duration(cfg.PeerAPI.RequestTimeout) * time.Second)
-	agent.SetUserAgent(SERVER_SIGNATURE)
-	agent.SetHeader("Authorization", "Bearer\x20"+token)
+	// Create HTTP client with timeout
+	httpClient := &http.Client{
+		Timeout: time.Duration(cfg.PeerAPI.RequestTimeout) * time.Second,
+	}
 
 	// Convert metrics map to array
 	sessionMutex.RLock()
@@ -238,28 +239,50 @@ func sendMetricsToPeerAPI(metrics map[string]SessionMetric) {
 		"metrics": metricsArray,
 	}
 
-	resp, err := agent.Post(url, client.Config{
-		Body: requestBody,
-	})
+	jsonBody, err := json.Marshal(requestBody)
+	if err != nil {
+		log.Printf("[Metrics] Failed to marshal request body: %v", err)
+		return
+	}
+
+	// Create request
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonBody))
+	if err != nil {
+		log.Printf("[Metrics] Failed to create request: %v", err)
+		return
+	}
+
+	// Set headers
+	setHTTPClientHeader(req, token, true)
+
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		log.Printf("[Metrics] Failed to send metrics to %s: %v (took %v)", url, err, time.Since(startTime))
 		return
 	}
-	defer resp.Close()
+	defer resp.Body.Close()
 
 	// Check HTTP status code
-	if resp.StatusCode() != 200 {
-		bodyText := string(resp.Body())
+	if resp.StatusCode != 200 {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		bodyText := string(bodyBytes)
 		log.Printf("[Metrics] Failed to send metrics, status code: %d, response body: %s (took %v)",
-			resp.StatusCode(), bodyText, time.Since(startTime))
+			resp.StatusCode, bodyText, time.Since(startTime))
+		return
+	}
+
+	// Read response body
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		log.Printf("[Metrics] Failed to read response body: %v (took %v)", err, time.Since(startTime))
 		return
 	}
 
 	// Parse response
 	var response PeerApiResponse
-	if err := json.Unmarshal(resp.Body(), &response); err != nil {
+	if err := json.Unmarshal(body, &response); err != nil {
 		log.Printf("[Metrics] Failed to parse response: %v, response body: %s (took %v)",
-			err, string(resp.Body()), time.Since(startTime))
+			err, string(body), time.Since(startTime))
 		return
 	}
 

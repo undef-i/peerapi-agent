@@ -85,7 +85,7 @@ func configureWireguardInterface(ctx context.Context, session *BgpSession) error
 		return fmt.Errorf("failed to create wireguard interface: %v (output: \"%s\")", err, strings.TrimSpace(output))
 	}
 	// Parse session data to get the port from passthrough JWT
-	var port int
+	port := 0
 	if len(session.Data) > 0 {
 		var sessionData SessionData
 		if err := json.Unmarshal(session.Data, &sessionData); err != nil {
@@ -128,11 +128,14 @@ func configureWireguardInterface(ctx context.Context, session *BgpSession) error
 	wgArgs := []string{
 		"set", session.Interface,
 		"private-key", cfg.WireGuard.PrivateKeyPath,
-		"listen-port", strconv.Itoa(port),
 		"peer", session.Credential,
 		"persistent-keepalive", strconv.Itoa(cfg.WireGuard.PersistentKeepaliveInterval),
 		"allowed-ips", cfg.WireGuard.AllowedIPs,
 	}
+	if port != 0 {
+		wgArgs = append(wgArgs, "listen-port", strconv.Itoa(port))
+	}
+
 	if session.Endpoint != "" {
 		wgArgs = append(wgArgs, "endpoint", session.Endpoint)
 		if _, _, err := net.SplitHostPort(session.Endpoint); err != nil {
@@ -218,6 +221,7 @@ func configureGreInterface(ctx context.Context, session *BgpSession) error {
 	if err := configureIPAddresses(ctx, session); err != nil {
 		return err
 	}
+
 	// Set MTU
 	cmd = exec.CommandContext(ctx, cfg.Bird.IPCommandPath, "link", "set", "mtu", strconv.Itoa(session.MTU), "dev", session.Interface)
 	mtuOutputBytes, mtuErr := cmd.CombinedOutput()

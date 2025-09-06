@@ -2,16 +2,17 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/gofiber/fiber/v3/client"
 )
 
 // NetStat stores network interface statistics
@@ -167,11 +168,12 @@ func heartbeatTask(ctx context.Context, wg *sync.WaitGroup) {
 	defer ticker.Stop()
 
 	uname := getOsUname()
-	agent := client.New().SetTimeout(time.Duration(cfg.PeerAPI.RequestTimeout) * time.Second)
-	agent.SetUserAgent(SERVER_SIGNATURE)
+	httpClient := &http.Client{
+		Timeout: time.Duration(cfg.PeerAPI.RequestTimeout) * time.Second,
+	}
 
 	// Send an initial heartbeat immediately
-	sendHeartbeat(agent, uname)
+	sendHeartbeat(httpClient, uname)
 
 	for {
 		select {
@@ -185,13 +187,13 @@ func heartbeatTask(ctx context.Context, wg *sync.WaitGroup) {
 			log.Printf("[HeartBeat] Heartbeat task shutdown completed in %v", time.Since(shutdownStart))
 			return
 		case <-ticker.C:
-			sendHeartbeat(agent, uname)
+			sendHeartbeat(httpClient, uname)
 		}
 	}
 }
 
 // sendHeartbeat sends a heartbeat message to the PeerAPI server
-func sendHeartbeat(agent *client.Client, uname string) {
+func sendHeartbeat(httpClient *http.Client, uname string) {
 	url := fmt.Sprintf("%s/agent/%s/heartbeat", cfg.PeerAPI.URL, cfg.PeerAPI.RouterUUID)
 	token, err := generateToken()
 	if err != nil {
@@ -202,28 +204,44 @@ func sendHeartbeat(agent *client.Client, uname string) {
 	routerSoftware, _ := birdPool.ShowStatus()
 	rx, tx, _ := getInterfaceTraffic(cfg.PeerAPI.WanInterfaces)
 
-	agent.SetHeader("Authorization", "Bearer\x20"+token)
-	resp, err := agent.Post(url, client.Config{
-		Body: map[string]any{
-			"version":   SERVER_SIGNATURE,
-			"kernel":    uname,
-			"loadAvg":   getLoadAverageStr(),
-			"uptime":    getUptimeSeconds(),
-			"rs":        routerSoftware,
-			"tx":        tx,
-			"rx":        rx,
-			"tcp":       getTcpConnections(),
-			"udp":       getUdpConnections(),
-			"timestamp": time.Now().UnixMilli(),
-		},
-	})
+	// Prepare request body
+	requestBody := map[string]any{
+		"version":   SERVER_SIGNATURE,
+		"kernel":    uname,
+		"loadAvg":   getLoadAverageStr(),
+		"uptime":    getUptimeSeconds(),
+		"rs":        routerSoftware,
+		"tx":        tx,
+		"rx":        rx,
+		"tcp":       getTcpConnections(),
+		"udp":       getUdpConnections(),
+		"timestamp": time.Now().UnixMilli(),
+	}
+
+	jsonBody, err := json.Marshal(requestBody)
+	if err != nil {
+		log.Printf("[HeartBeat] Failed to marshal request body: %v\n", err)
+		return
+	}
+
+	// Create request
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonBody))
+	if err != nil {
+		log.Printf("[HeartBeat] Failed to create request: %v\n", err)
+		return
+	}
+
+	// Set headers
+	setHTTPClientHeader(req, token, true)
+
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		log.Printf("[HeartBeat] Failed to send heartbeat: %v\n", err)
 		return
 	}
-	defer resp.Close()
+	defer resp.Body.Close()
 
-	if resp.StatusCode() != 200 {
-		log.Printf("[HeartBeat] Server returned status code: %d\n", resp.StatusCode())
+	if resp.StatusCode != 200 {
+		log.Printf("[HeartBeat] Server returned status code: %d\n", resp.StatusCode)
 	}
 }

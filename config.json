@@ -1,6 +1,7 @@
 {
   "server": {
     "debug": false,
+    "listenerType": "tcp",
     "listen": ":8080",
     "readTimeout": 5,
     "writeTimeout": 10,

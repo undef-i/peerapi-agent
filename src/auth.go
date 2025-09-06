@@ -3,9 +3,9 @@ package main
 import (
 	"crypto/subtle"
 	"errors"
+	"net/http"
 	"strings"
 
-	"github.com/gofiber/fiber/v3"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -15,8 +15,8 @@ const (
 
 // verifyBearerToken verifies if the request has a valid bearer token
 // The token should be a bcrypt hash of agentSecret+routerUuid
-func verifyBearerToken(c fiber.Ctx, token string) bool {
-	authHeader := c.Get("Authorization")
+func verifyBearerToken(r *http.Request, token string) bool {
+	authHeader := r.Header.Get("Authorization")
 	if !strings.HasPrefix(authHeader, bearerScheme) {
 		return false
 	}
@@ -47,16 +47,13 @@ func generateToken() (string, error) {
 	return string(hash), nil
 }
 
-// Protected middleware protects routes with bearer token authentication
-func Protected() fiber.Handler {
-	return func(c fiber.Ctx) error {
-		if !verifyBearerToken(c, cfg.PeerAPI.Secret) {
-			return c.Status(fiber.StatusUnauthorized).JSON(AgentApiResponse{
-				Code:    401,
-				Message: "Unauthorized",
-				Data:    nil,
-			})
+// withAuth wraps handlers with bearer token authentication
+func withAuth(handler func(http.ResponseWriter, *http.Request)) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !verifyBearerToken(r, cfg.PeerAPI.Secret) {
+			sendJSONResponse(w, http.StatusUnauthorized, "Unauthorized", nil)
+			return
 		}
-		return c.Next()
+		handler(w, r)
 	}
 }

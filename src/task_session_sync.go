@@ -3,18 +3,19 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net"
+	"net/http"
 	"reflect"
 	"regexp"
 	"strconv"
 	"sync"
 	"time"
-
-	"github.com/gofiber/fiber/v3/client"
 )
 
 const (
@@ -51,8 +52,9 @@ const (
 // getBgpSessions fetches BGP session information from the PeerAPI server
 func getBgpSessions() ([]BgpSession, error) {
 	// Create HTTP client with timeout
-	agent := client.New().SetTimeout(time.Duration(cfg.PeerAPI.RequestTimeout) * time.Second)
-	agent.SetUserAgent(SERVER_SIGNATURE)
+	client := &http.Client{
+		Timeout: time.Duration(cfg.PeerAPI.RequestTimeout) * time.Second,
+	}
 
 	// Build request URL
 	url := fmt.Sprintf("%s/agent/%s/sessions", cfg.PeerAPI.URL, cfg.PeerAPI.RouterUUID)
@@ -63,25 +65,35 @@ func getBgpSessions() ([]BgpSession, error) {
 		return nil, fmt.Errorf("[GetBGPSessions] failed to generate token: %v", err)
 	}
 
-	// Send request to PeerAPI
-	agent.SetHeader("Authorization", "Bearer\x20"+token)
-	resp, err := agent.Get(url)
-
+	// Create request
+	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
-		if resp != nil {
-			resp.Close()
-		}
+		return nil, fmt.Errorf("[GetBGPSessions] failed to create request: %v", err)
+	}
+
+	// Set headers
+	setHTTPClientHeader(req, token, false)
+
+	// Send request to PeerAPI
+	resp, err := client.Do(req)
+	if err != nil {
 		return nil, fmt.Errorf("[GetBGPSessions] failed to get sessions: %v", err)
 	}
-	defer resp.Close()
+	defer resp.Body.Close()
 
-	if resp.StatusCode() != 200 {
-		return nil, fmt.Errorf("[GetBGPSessions] failed to get sessions, status code: %d", resp.StatusCode())
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("[GetBGPSessions] failed to get sessions, status code: %d", resp.StatusCode)
+	}
+
+	// Read response body
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("[GetBGPSessions] failed to read response body: %v", err)
 	}
 
 	// Parse response
 	var response PeerApiResponse
-	if err := json.Unmarshal(resp.Body(), &response); err != nil {
+	if err := json.Unmarshal(body, &response); err != nil {
 		return nil, fmt.Errorf("[GetBGPSessions] failed to parse response: %v", err)
 	}
 
@@ -102,8 +114,9 @@ func getBgpSessions() ([]BgpSession, error) {
 // reportNewStatusToCenter reports a session status change to the PeerAPI server
 func reportNewStatusToCenter(sessionUUID string, status int) error {
 	// Create HTTP client with timeout
-	agent := client.New().SetTimeout(time.Duration(cfg.PeerAPI.RequestTimeout) * time.Second)
-	agent.SetUserAgent(SERVER_SIGNATURE)
+	client := &http.Client{
+		Timeout: time.Duration(cfg.PeerAPI.RequestTimeout) * time.Second,
+	}
 
 	// Build request URL
 	url := fmt.Sprintf("%s/agent/%s/modify", cfg.PeerAPI.URL, cfg.PeerAPI.RouterUUID)
@@ -114,30 +127,46 @@ func reportNewStatusToCenter(sessionUUID string, status int) error {
 		return fmt.Errorf("<%s> failed to generate token: %v", sessionUUID, err)
 	}
 
-	// Send request to PeerAPI
-	agent.SetHeader("Authorization", "Bearer\x20"+token)
-	resp, err := agent.Post(url, client.Config{
-		Body: map[string]any{
-			"status":  status,
-			"session": sessionUUID,
-		},
-	})
+	// Prepare request body
+	requestBody := map[string]any{
+		"status":  status,
+		"session": sessionUUID,
+	}
 
+	jsonBody, err := json.Marshal(requestBody)
 	if err != nil {
-		if resp != nil {
-			resp.Close()
-		}
+		return fmt.Errorf("<%s> failed to marshal request body: %v", sessionUUID, err)
+	}
+
+	// Create request
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonBody))
+	if err != nil {
+		return fmt.Errorf("<%s> failed to create request: %v", sessionUUID, err)
+	}
+
+	// Set headers
+	setHTTPClientHeader(req, token, true)
+
+	// Send request to PeerAPI
+	resp, err := client.Do(req)
+	if err != nil {
 		return fmt.Errorf("<%s> failed to notify: %v", sessionUUID, err)
 	}
-	defer resp.Close()
+	defer resp.Body.Close()
 
-	if resp.StatusCode() != 200 {
-		return fmt.Errorf("<%s> failed to notify, status code: %d", sessionUUID, resp.StatusCode())
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("<%s> failed to notify, status code: %d", sessionUUID, resp.StatusCode)
+	}
+
+	// Read response body
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("<%s> failed to read response body: %v", sessionUUID, err)
 	}
 
 	// Parse response
 	var response PeerApiResponse
-	if err := json.Unmarshal(resp.Body(), &response); err != nil {
+	if err := json.Unmarshal(body, &response); err != nil {
 		return fmt.Errorf("<%s> failed to parse response: %v", sessionUUID, err)
 	}
 

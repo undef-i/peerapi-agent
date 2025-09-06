@@ -1,6 +1,6 @@
 # iEdon PeerAPI Agent
 
-[![Go Version](https://img.shields.io/badge/Go-1.24%2B-blue.svg)](https://golang.org)
+[![Go Version](https://img.shields.io/badge/Go-1.25%2B-blue.svg)](https://golang.org)
 
 A comprehensive Go application for automated BGP peering session management on `iEdon-Net` infrastructure nodes. This agent communicates with a central PeerAPI server to orchestrate BGP session lifecycle, interface configuration, network monitoring, and real-time performance metrics collection.
 
@@ -150,7 +150,7 @@ The peerapi-agent implements comprehensive graceful shutdown handling to ensure 
 
 1. **Signal Reception**: Captures SIGINT, SIGTERM, and SIGKILL signals
 2. **Context Cancellation**: Immediately cancels the root context to notify all background tasks
-3. **HTTP Server Shutdown**: Gracefully stops the Fiber HTTP server with context timeout
+3. **HTTP Server Shutdown**: Gracefully stops the HTTP server with context timeout
 4. **Task Completion**: Waits for all 6 background tasks to complete within timeout (default: 30 seconds)
 5. **Resource Cleanup**: Performs comprehensive cleanup of all resources:
    - Closes GeoIP database connections
@@ -259,19 +259,43 @@ The agent is configured through a JSON file with the following structure. All co
 
 #### Server Configuration (`server`)
 
-HTTP server settings for the agent's API endpoints.
+HTTP server settings for the agent's API endpoints. The server supports both TCP and Unix socket listeners.
 
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
 | `debug` | boolean | Enable debug mode with detailed access logging | `false` |
-| `listen` | string | Address and port to bind the HTTP server | `:8080` |
+| `listenerType` | string | Type of listener: `tcp` or `unix` | `tcp` |
+| `listen` | string | Address and port for TCP (`host:port`) or socket file path for Unix | `:8080` |
 | `readTimeout` | integer | Read timeout in seconds | `5` |
 | `writeTimeout` | integer | Write timeout in seconds | `10` |
 | `idleTimeout` | integer | Idle connection timeout in seconds | `120` |
-| `writeBufferSize` | integer | Write buffer size in bytes | `4096` |
-| `readBufferSize` | integer | Read buffer size in bytes | `4096` |
+| `writeBufferSize` | integer | Write buffer size in bytes (TCP only) | `4096` |
+| `readBufferSize` | integer | Read buffer size in bytes (TCP only) | `4096` |
 | `bodyLimit` | integer | Maximum request body size in bytes | `1048576` |
 | `trustedProxies` | string[] | List of trusted proxy IP addresses or CIDR blocks | `["127.0.0.1", "::1"]` |
+
+**Listener Types:**
+- **TCP**: Standard network listener for external access (e.g., `:8080`, `127.0.0.1:8080`)
+- **Unix Socket**: Local domain socket for same-machine communication (e.g., `/tmp/peerapi-agent.sock`, `/var/run/peerapi-agent.sock`)
+
+**Examples:**
+```json
+// TCP listener (default)
+{
+  "server": {
+    "listenerType": "tcp",
+    "listen": ":8080"
+  }
+}
+
+// Unix socket listener
+{
+  "server": {
+    "listenerType": "unix", 
+    "listen": "/tmp/peerapi-agent.sock"
+  }
+}
+```
 
 #### Logger Configuration (`logger`)
 
@@ -469,7 +493,7 @@ peerapi-agent/
 ### Dependencies
 
 #### Core Dependencies
-- **Fiber v3** - High-performance HTTP framework
+- **net/http** - Standard Go HTTP server and client
 - **jwt/v5** - JWT authentication and token validation
 - **geoip2-golang** - MaxMind GeoIP database integration
 - **lumberjack.v2** - Log file rotation and management
@@ -482,25 +506,25 @@ peerapi-agent/
 
 ### Building and Testing
 
-#### Development Build
 ```bash
+#!/bin/sh
+set -e
+echo "Building peerapi-agent for Linux AMD64..."
+
+export GOOS=linux
+export GOARCH=amd64
+
+rm -rf dist || true
+mkdir dist
+
 cd src
 go mod tidy
-go build -o peerapi-agent-dev .
-```
+go build -o ../dist/peerapi-agent -ldflags="-X main.GIT_COMMIT=$(git rev-parse --short HEAD)"
 
-#### Production Build
-```bash
-cd src
-go get
-go build -o peerapi-agent" .
-```
+cd ..
+cp config.json ./dist/config.json
 
-#### Testing
-```bash
-cd src
-go test ./...
-go vet ./...
+echo "Build completed."
 ```
 
 ### Contributing
@@ -515,15 +539,14 @@ go vet ./...
 ## Technologies and Dependencies
 
 ### Core Technologies
-- **[Go 1.24+](https://golang.org)** - Modern systems programming language with excellent concurrency support
+- **[Go 1.25+](https://golang.org)** - Modern systems programming language with excellent concurrency support
 - **[BIRD 2.0+](https://bird.network.cz/)** - Internet routing daemon for BGP, OSPF, and other protocols
 - **[Linux](https://kernel.org)** - Required for network interface management and system metrics
 
 ### Go Dependencies
 
 #### HTTP and Web Framework
-- **[Fiber v3](https://gofiber.io/)** - Express-inspired web framework with high performance
-- **[fasthttp](https://github.com/valyala/fasthttp)** - Fast HTTP package for Go (Fiber dependency)
+- **[net/http](https://pkg.go.dev/net/http)** - Go's standard HTTP package for server and client functionality
 
 #### Authentication and Security
 - **[jwt/v5](https://github.com/golang-jwt/jwt)** - JSON Web Token implementation for Go
@@ -536,11 +559,6 @@ go vet ./...
 #### Logging and Utilities
 - **[lumberjack.v2](https://gopkg.in/natefinch/lumberjack.v2)** - Rolling logger with size-based rotation
 - **[goInfo](https://github.com/matishsiao/goInfo)** - System information gathering
-
-#### Data Processing
-- **[cbor/v2](https://github.com/fxamacker/cbor)** - CBOR encoding/decoding
-- **[msgp](https://github.com/tinylib/msgp)** - MessagePack serialization
-- **[uuid](https://github.com/google/uuid)** - UUID generation and parsing
 
 ### External Services
 
@@ -563,111 +581,6 @@ go vet ./...
 - **DN42 Communities** - DN42 network BGP community standards
 
 This architecture ensures robust, scalable, and maintainable BGP session management with modern Go practices and industry-standard networking protocols.
-
-## Monitoring and Troubleshooting
-
-### Health Checks
-
-Monitor the agent's health using the built-in API endpoints:
-
-```bash
-# Check overall status and current sessions
-curl -H "Authorization: Bearer YOUR_JWT_TOKEN" http://localhost:8080/status
-
-# Trigger manual session sync
-curl -H "Authorization: Bearer YOUR_JWT_TOKEN" http://localhost:8080/sync
-```
-
-### Log Analysis
-
-The agent provides comprehensive logging at multiple levels:
-
-```bash
-# Monitor real-time logs
-tail -f /data/peerapi-agent/logs/peerapi-agent.log
-
-# Search for specific session activity
-grep "Session.*enabled" /data/peerapi-agent/logs/peerapi-agent.log
-
-# Monitor BGP community updates
-grep "DN42BGPCommunity" /data/peerapi-agent/logs/peerapi-agent.log
-```
-
-### Common Issues
-
-#### BIRD Connection Issues
-```bash
-# Check BIRD daemon status
-systemctl status bird
-birdc show status
-
-# Verify BIRD control socket permissions
-ls -la /var/run/bird/bird.ctl
-```
-
-#### Interface Configuration Problems
-```bash
-# Check WireGuard interfaces
-wg show
-
-# Verify IP configuration
-ip addr show | grep -E "(wg|gre)"
-
-# Check routing table
-ip route show
-```
-
-#### Geographic Validation Issues
-```bash
-# Verify GeoIP database
-file /data/peerapi-agent/GeoLite2-Country.mmdb
-
-# Test GeoIP resolution
-curl -s https://ipinfo.io/json | jq .country
-```
-
-### Performance Monitoring
-
-Key metrics to monitor for optimal performance:
-
-- **Session Count**: Active BGP sessions vs. configured sessions
-- **RTT Values**: Network latency trends and outliers  
-- **Route Counts**: Import/export route statistics
-- **Interface Bandwidth**: Traffic utilization on WAN interfaces
-- **BIRD Pool Usage**: Connection pool efficiency and utilization
-- **Error Rates**: Failed session setups and configuration errors
-
-### Debugging
-
-Enable debug mode for detailed troubleshooting:
-
-```json
-{
-  "server": {
-    "debug": true,
-    // ... other settings
-  }
-}
-```
-
-This enables detailed HTTP access logging and additional debug information in the logs.
-
-## Security Considerations
-
-### Authentication
-- **JWT Tokens**: All API endpoints require valid JWT authentication
-- **Secret Management**: Store secrets securely and rotate regularly
-- **Network Access**: Restrict API access to trusted networks only
-
-### Network Security
-- **Interface Isolation**: BGP sessions run in isolated network namespaces
-- **Firewall Rules**: Configure appropriate firewall rules for BGP traffic
-- **Encryption**: WireGuard provides authenticated encryption for all tunnel traffic
-
-### Operational Security
-- **Log Monitoring**: Monitor logs for suspicious activity and failed authentication attempts
-- **Resource Limits**: Configure appropriate resource limits to prevent DoS attacks
-- **Regular Updates**: Keep the agent and dependencies updated with security patches
 
 ## Performance Tuning
 
@@ -705,19 +618,4 @@ This enables detailed HTTP access logging and additional debug information in th
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## Support
-
-For issues, questions, or contributions:
-
-- **GitHub Issues**: [https://github.com/iedon/peerapi-agent/issues](https://github.com/iedon/peerapi-agent/issues)
-- **Documentation**: Check this README and inline code documentation
-- **Community**: Join the DN42 community for networking discussions
-
-## Acknowledgments
-
-- **BIRD Team** - For the excellent BIRD routing daemon
-- **DN42 Community** - For the decentralized network infrastructure standards
-- **MaxMind** - For providing GeoIP database services
-- **Go Community** - For the robust standard library and ecosystem
+This project is licensed under the GPL3 License - see the [LICENSE](LICENSE) file for details.
