@@ -177,12 +177,13 @@ The agent is configured through a JSON file with the following structure. All co
 {
   "server": {
     "debug": false,
+    "listenerType": "tcp",
     "listen": ":8080",
-    "readTimeout": 5,
-    "writeTimeout": 10,
+    "readTimeout": 30,
+    "writeTimeout": 30,
     "idleTimeout": 120,
-    "writeBufferSize": 4096,
-    "readBufferSize": 4096,
+    "writeBufferSize": 8192,
+    "readBufferSize": 8192,
     "bodyLimit": 1048576,
     "trustedProxies": ["127.0.0.1", "::1"]
   },
@@ -266,11 +267,11 @@ HTTP server settings for the agent's API endpoints. The server supports both TCP
 | `debug` | boolean | Enable debug mode with detailed access logging | `false` |
 | `listenerType` | string | Type of listener: `tcp` or `unix` | `tcp` |
 | `listen` | string | Address and port for TCP (`host:port`) or socket file path for Unix | `:8080` |
-| `readTimeout` | integer | Read timeout in seconds | `5` |
-| `writeTimeout` | integer | Write timeout in seconds | `10` |
+| `readTimeout` | integer | Read timeout in seconds | `30` |
+| `writeTimeout` | integer | Write timeout in seconds | `30` |
 | `idleTimeout` | integer | Idle connection timeout in seconds | `120` |
-| `writeBufferSize` | integer | Write buffer size in bytes (TCP only) | `4096` |
-| `readBufferSize` | integer | Read buffer size in bytes (TCP only) | `4096` |
+| `writeBufferSize` | integer | Write buffer size in bytes (TCP only) | `8192` |
+| `readBufferSize` | integer | Read buffer size in bytes (TCP only) | `8192` |
 | `bodyLimit` | integer | Maximum request body size in bytes | `1048576` |
 | `trustedProxies` | string[] | List of trusted proxy IP addresses or CIDR blocks | `["127.0.0.1", "::1"]` |
 

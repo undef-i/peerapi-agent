@@ -124,18 +124,19 @@ func configureWireguardInterface(ctx context.Context, session *BgpSession) error
 		}
 	}
 
-	// Configure the peer settings
+	// Configure the peer settings, including optional listen port(must set before addresses)
 	wgArgs := []string{
 		"set", session.Interface,
 		"private-key", cfg.WireGuard.PrivateKeyPath,
-		"peer", session.Credential,
-		"persistent-keepalive", strconv.Itoa(cfg.WireGuard.PersistentKeepaliveInterval),
-		"allowed-ips", cfg.WireGuard.AllowedIPs,
 	}
 	if port != 0 {
 		wgArgs = append(wgArgs, "listen-port", strconv.Itoa(port))
 	}
-
+	wgArgs = append(wgArgs,
+		"peer", session.Credential,
+		"persistent-keepalive", strconv.Itoa(cfg.WireGuard.PersistentKeepaliveInterval),
+		"allowed-ips", cfg.WireGuard.AllowedIPs,
+	)
 	if session.Endpoint != "" {
 		wgArgs = append(wgArgs, "endpoint", session.Endpoint)
 		if _, _, err := net.SplitHostPort(session.Endpoint); err != nil {
