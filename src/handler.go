@@ -187,10 +187,10 @@ func getGREPassthroughInfo(w http.ResponseWriter, req *NodePassthroughRequest, i
 	var endpoint string
 	var tunnelType string
 	if isIPv6 {
-		endpoint = cfg.GRE.LocalEndpointHost6
+		endpoint = cfg.GRE.LocalEndpointDesc6
 		tunnelType = "GRE over IPv6(ip6gre)"
 	} else {
-		endpoint = cfg.GRE.LocalEndpointHost4
+		endpoint = cfg.GRE.LocalEndpointDesc4
 		tunnelType = "GRE over IPv4(gre)"
 	}
 

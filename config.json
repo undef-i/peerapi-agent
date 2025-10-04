@@ -121,6 +121,8 @@
     "ipv6LinkLocal": "fe80::118",
     "localEndpointHost4":"1.1.1.1",
     "localEndpointHost6":"fd00::1",
+    "localEndpointDesc4":"Please contact to get IPv4 endpoint",
+    "localEndpointDesc6":"Please contact to get IPv6 endpoint",
     "dn42BandwidthCommunity": 24,
     "dn42InterfaceSecurityCommunity": 31
   }

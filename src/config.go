@@ -69,6 +69,8 @@ type greConfig struct {
 	IPv6LinkLocal                  string `json:"ipv6LinkLocal"`      // IPv6 link-local address for GRE interface
 	LocalEndpointHost4             string `json:"localEndpointHost4"` // Local IPv4 endpoint for GRE tunnel
 	LocalEndpointHost6             string `json:"localEndpointHost6"` // Local IPv6 endpoint for GRE tunnel
+	LocalEndpointDesc4             string `json:"localEndpointDesc4"` // Description for local IPv4 endpoint
+	LocalEndpointDesc6             string `json:"localEndpointDesc6"` // Description for local IPv6 endpoint
 	DN42BandwidthCommunity         int    `json:"dn42BandwidthCommunity"`
 	DN42InterfaceSecurityCommunity int    `json:"dn42InterfaceSecurityCommunity"`
 }
