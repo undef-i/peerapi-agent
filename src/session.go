@@ -196,7 +196,8 @@ func configureGreInterface(ctx context.Context, session *BgpSession) error {
 			"mode", "ip6gre",
 			"local", cfg.GRE.LocalEndpointHost6,
 			"remote", session.Endpoint,
-			"ttl", "255")
+			"ttl", "255",
+			"encaplimit", "none")
 
 		log.Printf("Creating IPv6 GRE tunnel: %s with local: %s remote: %s",
 			session.Interface, cfg.GRE.LocalEndpointHost6, session.Endpoint)
