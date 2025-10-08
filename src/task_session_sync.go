@@ -450,6 +450,20 @@ func validateWireGuardPublicKey(key string) error {
 		return fmt.Errorf("WireGuard public key cannot be empty")
 	}
 
+	var creds WireGuardCredentials
+	if err := json.Unmarshal([]byte(key), &creds); err == nil {
+		if creds.PublicKey == "" {
+			return fmt.Errorf("WireGuard public key cannot be empty")
+		}
+		if !base64Regex.MatchString(creds.PublicKey) {
+			return fmt.Errorf("invalid WireGuard public key format, expected base64 encoded string")
+		}
+		if creds.PSK != "" && !base64Regex.MatchString(creds.PSK) {
+			return fmt.Errorf("invalid WireGuard PSK format, expected base64 encoded string")
+		}
+		return nil
+	}
+
 	if !base64Regex.MatchString(key) {
 		return fmt.Errorf("invalid WireGuard public key format, expected base64 encoded string")
 	}

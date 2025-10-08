@@ -25,6 +25,11 @@ type NodePassthroughRequest struct {
 	} `json:"data"`
 }
 
+type WireGuardCredentials struct {
+	PublicKey string `json:"publicKey"`
+	PSK       string `json:"psk,omitempty"`
+}
+
 // Agent API Session types
 type BgpSession struct {
 	UUID          string          `json:"uuid"`

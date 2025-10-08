@@ -71,6 +71,21 @@ func configureWireguardInterface(ctx context.Context, session *BgpSession) error
 		return fmt.Errorf("empty credential (used as publickey) specified")
 	}
 
+	var publicKey string
+	var psk string
+	
+	var creds WireGuardCredentials
+	if err := json.Unmarshal([]byte(session.Credential), &creds); err == nil {
+		publicKey = creds.PublicKey
+		psk = creds.PSK
+	} else {
+		publicKey = session.Credential
+	}
+
+	if publicKey == "" {
+		return fmt.Errorf("empty public key specified")
+	}
+
 	// Delete the interface if it exists to ensure clean state
 	if err := deleteInterface(session.Interface); err != nil {
 		log.Printf("Warning: Failed to delete existing interface %s: %v", session.Interface, err)
@@ -133,10 +148,28 @@ func configureWireguardInterface(ctx context.Context, session *BgpSession) error
 		wgArgs = append(wgArgs, "listen-port", strconv.Itoa(port))
 	}
 	wgArgs = append(wgArgs,
-		"peer", session.Credential,
+		"peer", publicKey,
 		"persistent-keepalive", strconv.Itoa(cfg.WireGuard.PersistentKeepaliveInterval),
 		"allowed-ips", cfg.WireGuard.AllowedIPs,
 	)
+	
+	if psk != "" {
+		pskFile, err := os.CreateTemp("", "psk_*.key")
+		if err != nil {
+			return fmt.Errorf("failed to create temporary PSK file: %v", err)
+		}
+		defer os.Remove(pskFile.Name())
+		
+		if _, err := pskFile.WriteString(psk + "\n"); err != nil {
+			pskFile.Close()
+			return fmt.Errorf("failed to write PSK to file: %v", err)
+		}
+		pskFile.Close()
+		
+		wgArgs = append(wgArgs, "preshared-key", pskFile.Name())
+		log.Printf("Adding PSK for session %s", session.UUID)
+	}
+	
 	if session.Endpoint != "" {
 		wgArgs = append(wgArgs, "endpoint", session.Endpoint)
 		if _, _, err := net.SplitHostPort(session.Endpoint); err != nil {
